@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+      - uses: leafo/gh-actions-luarocks@v4
+      - run: luarocks install luacheck
+      - run: luarocks install busted
+      - run: ./scripts/check.sh
+
+  install:
+    # The install script is the front door and the one thing a reader is asked to paste into a
+    # shell, so it gets run rather than only read. Against the checked-out tree packed into the
+    # shape GitHub's own tarball has, so what is exercised is the extraction and the replace.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install into a folder that looks like AddOns
+        run: |
+          set -euo pipefail
+          bash -n install.sh
+          mkdir -p /tmp/AddOns/chronie
+          # Something already installed, including a file no release ships, so the replace is
+          # observed rather than assumed.
+          touch /tmp/AddOns/chronie/stale.lua
+          cd /tmp/AddOns
+          CHRONIE_LITE_REPOSITORY="${GITHUB_REPOSITORY}" \
+          CHRONIE_LITE_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" \
+            bash "${GITHUB_WORKSPACE}/install.sh"
+          test -f chronie/chronie.toc
+          test -f chronie/Main.lua
+          test -d chronie/src
+          test ! -e chronie/stale.lua
+          test ! -e chronie/spec
+          test ! -e chronie/install.sh

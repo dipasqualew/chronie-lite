@@ -1,0 +1,83 @@
+## Interface: 120005
+## Title: Chronie Lite
+## Notes: Cross-character lockouts and per-zone segment/event history. /chronie locks
+## Author: chronie
+## Version: 0.7.0-lite
+## SavedVariables: ChronieDB
+
+# The folder is still `chronie` and the saved variables are still `ChronieDB`, deliberately:
+# this is the same addon with the account walk and the desktop app's request channels switched
+# off (see src/Settings.lua), so a player swapping one for the other keeps every lockout,
+# segment and memory they already had. It is a replacement rather than a second addon, and
+# installing it beside the full Chronie is not a thing to do — see install.sh.
+
+# Alphabetical, with Main.lua last, and that is the whole of the ordering. Every file under
+# src/ does one thing when the client executes it — hang a `ns.newThing` factory off the
+# namespace — and nothing calls another module's factory until Main.lua wires them together,
+# so the client is free to read them in any order. Sorted rather than appended-to because an
+# append is where two unrelated branches meet: a list in the order features arrived in puts
+# every new one on the same line, and git merges by line locality (issue #155).
+#
+# If a file ever needs another to have run first, that is a reason to move the work into
+# Main.lua rather than a reason to move the line.
+
+src/AccountIdentity.lua
+src/AccountTooltip.lua
+src/CaptureBurst.lua
+src/CaptureTriggers.lua
+src/Census.lua
+src/CensusDomains.lua
+src/CensusReport.lua
+src/CensusRequests.lua
+src/CensusResync.lua
+src/CharacterLook.lua
+src/ClassDisplay.lua
+src/CombatLogging.lua
+src/CurrencyItems.lua
+src/CurrencyWindow.lua
+src/CustomSetRequests.lua
+src/CustomSetSnapshot.lua
+src/CustomSetWriter.lua
+src/DelveRun.lua
+src/DetailWindow.lua
+src/EntryLog.lua
+src/EntryPrompt.lua
+src/EntryText.lua
+src/EntryToast.lua
+src/EquipsetLedger.lua
+src/EventDispatcher.lua
+src/ExpansionIndex.lua
+src/FactionStanding.lua
+src/HoldingsStore.lua
+src/HoldingsSweep.lua
+src/Location.lua
+src/LockoutDetails.lua
+src/LockoutScanner.lua
+src/LockoutStore.lua
+src/LockoutTable.lua
+src/LockoutWindow.lua
+src/LogProbe.lua
+src/Logger.lua
+src/MapPosition.lua
+src/MinimapButton.lua
+src/ReportCommand.lua
+src/ReportWindow.lua
+src/ResultsWindow.lua
+src/ScreenshotWatch.lua
+src/SegmentLog.lua
+src/SegmentSchema.lua
+src/SegmentTable.lua
+src/SegmentTally.lua
+src/SegmentTracker.lua
+src/SegmentViews.lua
+src/Settings.lua
+src/SlashRouter.lua
+src/TransmogPreview.lua
+Main.lua
+
+# There is no Bindings.xml, and adding one back is a decision rather than a detail. Chronie
+# photographs by listening for SCREENSHOT_SUCCEEDED, which the client fires for the
+# screenshot key every player already has bound, so a key of its own would be a second way
+# to do the one thing — and the file was its own recurring bug: the client loads it by name
+# before it reads this manifest, so naming it here parsed it twice as UI XML (issue #44),
+# and a header declared on more than one binding was reported as loaded twice (issue #69).
