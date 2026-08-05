@@ -18,8 +18,9 @@ describe("ns.newResultsWindow", function()
     ---The picker needs both a list and a way to choose from it, so either half can be
     ---withheld on its own — `views = false`, or `select = false` — because the detail window
     ---is handed neither and must come out of it a panel with a plain title.
-    ---`options.openers = false` withholds the mount and pet journal openers, which is the build
-    ---that can name what was collected and was given nowhere to send a click on it.
+    ---`options.openers = false` withholds every place a row can send a click — the mount and
+    ---pet journals, the quest the client puts up, the character pane's reputation tab — which
+    ---is the build that can name what happened and was given nowhere to send a click on it.
     ---`options.set` is the membership every transmog row's appearance is said to belong to —
     ---a table, or a function of the source id for a case where one row is in a set and the
     ---next is not. `set = false` withholds the lookup entirely, which is the build that has
@@ -46,6 +47,8 @@ describe("ns.newResultsWindow", function()
             achievements = {},
             mounts = {},
             pets = {},
+            quests = {},
+            factions = {},
             previews = {},
             collections = {},
             setPreviews = {},
@@ -130,6 +133,15 @@ describe("ns.newResultsWindow", function()
             -- question: a battle pet is the one collectible an account may own several of.
             openPet = options.openers ~= false and function(speciesID, guid)
                 recorded.pets[#recorded.pets + 1] = { id = speciesID, guid = guid }
+            end or nil,
+            -- Withheld with them, and for the same reason: every quest on the panel has been
+            -- handed in and every faction on it has a pane of its own, so both are rows that
+            -- can name something and may have been given nowhere to send a click on it.
+            openQuest = options.openers ~= false and function(questID)
+                recorded.quests[#recorded.quests + 1] = questID
+            end or nil,
+            openReputation = options.openers ~= false and function(factionID)
+                recorded.factions[#recorded.factions + 1] = factionID
             end or nil,
             previewTransmog = function(id)
                 recorded.previews[#recorded.previews + 1] = id
@@ -451,65 +463,141 @@ describe("ns.newResultsWindow", function()
         return nil
     end
 
+    ---The frame the body's rows are actually drawn on: the content inside the viewport the
+    ---panel names after itself. Found down from the panel rather than out of the list of every
+    ---frame built, because these helpers are handed the panel and a case may have named it
+    ---anything it likes.
+    ---@param frame table the panel's own frame
+    ---@return table
+    local function bodyOf(frame)
+        for _, child in ipairs(frame.children or {}) do
+            if child.frameName == (frame.frameName or "") .. "Body" then
+                return assert(child.children[1], "the viewport has no content frame")
+            end
+        end
+        error("the panel built no viewport")
+    end
+
+    ---Every row of the body, in the order the pool handed them out: the label, the value
+    ---beside it, and the hit area covering both.
+    ---
+    ---A row is three things rather than two now. The pointer is answered by a Button over the
+    ---whole row rather than by the row's own text, because a font string is a region: the
+    ---client hands a region a click readily enough, but never a mouse-over — so a tooltip hung
+    ---on one is wired to a script nothing ever runs. Pairing is by position, which is what the
+    ---pool's creation order buys: the hit area is made first and then the two font strings, so
+    ---the Nth child frame of the body owns the Nth pair of them.
+    ---
+    ---The bars are pooled on the same body and their captions land in the same list, so the
+    ---one font string the panel centres is dropped first. That is the same thing `barsOf`
+    ---leans on from the other side: a caption is centred and a row's two halves never are,
+    ---which is what keeps two pools drawn on one frame apart.
+    ---@param frame table
+    ---@return table[] `{ { label = table, value = table, hit = table }, ... }`
+    local function rowsIn(frame)
+        local body = bodyOf(frame)
+        local halves = {}
+        for _, fontString in ipairs(body.fontStrings) do
+            if fontString.justify ~= "CENTER" then
+                halves[#halves + 1] = fontString
+            end
+        end
+        local drawn = {}
+        for index = 1, math.floor(#halves / 2) do
+            drawn[index] = {
+                label = halves[index * 2 - 1],
+                value = halves[index * 2],
+                hit = body.children[index],
+            }
+        end
+        return drawn
+    end
+
+    ---The first row on screen whose label says `name`, or nil where none does.
+    ---@param frame table
+    ---@param name string
+    ---@return table? `{ label = table, value = table, hit = table }`
+    local function rowSaying(frame, name)
+        for _, row in ipairs(rowsIn(frame)) do
+            local label = row.label
+            if label.shown and label.template == ROW_FONT and label.justify == "LEFT"
+                and (label.text or ""):find(name, 1, true) then
+                return row
+            end
+        end
+        return nil
+    end
+
     ---The label font string of the first row saying `name`, for the assertions that are about
     ---how a row is drawn rather than what it says.
     ---@param frame table
     ---@param name string
     ---@return table
     local function labelFor(frame, name)
-        for _, fontString in ipairs((regionsOf(frame))) do
-            if fontString.shown and fontString.template == ROW_FONT and fontString.justify == "LEFT"
-                and (fontString.text or ""):find(name, 1, true) then
-                return fontString
-            end
+        local row = rowSaying(frame, name)
+        if not row then
+            error("no row saying " .. name .. " on screen")
         end
-        error("no row saying " .. name .. " on screen")
+        return row.label
     end
 
-    ---Clicks the first row saying `name`, the way a player reaches what is under a heading.
+    ---The hit area of the first row saying `name` — the frame the client would deliver a
+    ---click or a mouse-over to, which is the only thing on the row that either reaches.
+    ---@param frame table
+    ---@param name string
+    ---@return table
+    local function hitFor(frame, name)
+        local row = rowSaying(frame, name)
+        if not row then
+            error("no row saying " .. name .. " on screen")
+        end
+        return assert(row.hit, "the row saying " .. name .. " has no hit area")
+    end
+
+    ---Clicks the first row saying `name`, with whichever button.
+    ---@param frame table
+    ---@param name string
+    ---@param button string? Defaults to the left one, which is every click but the transmog
+    ---rows' second answer.
+    local function click(frame, name, button)
+        local row = rowSaying(frame, name)
+        if not row then
+            error("no row saying " .. name .. " to click")
+        end
+        row.hit:run("OnClick", button or "LeftButton")
+    end
+
+    ---Clicks a heading, the way a player reaches what is under it. The same click as any
+    ---other and named for what it is for: nearly every test here opens a block before it can
+    ---say anything about the rows in it, and "expand" is what that line is doing.
     ---@param frame table
     ---@param name string
     local function expand(frame, name)
-        for _, fontString in ipairs((regionsOf(frame))) do
-            if fontString.shown and fontString.template == ROW_FONT
-                and (fontString.text or ""):find(name, 1, true) then
-                fontString:run("OnMouseUp", "LeftButton")
-                return
-            end
-        end
-        error("no row saying " .. name .. " to click")
+        click(frame, name)
     end
 
     ---Rests the pointer on the first row saying `name`, and takes it off again if asked.
     ---@param frame table
     ---@param name string
     ---@param options table? `{ leave = boolean }`
-    ---@return table the font string the pointer was over
+    ---@return table the hit area the pointer was over
     local function pointAt(frame, name, options)
-        for _, fontString in ipairs((regionsOf(frame))) do
-            if fontString.shown and fontString.template == ROW_FONT and fontString.justify == "LEFT"
-                and (fontString.text or ""):find(name, 1, true) then
-                fontString:run("OnEnter")
-                if options and options.leave then
-                    fontString:run("OnLeave")
-                end
-                return fontString
-            end
+        local row = rowSaying(frame, name)
+        if not row then
+            error("no row saying " .. name .. " to point at")
         end
-        error("no row saying " .. name .. " to point at")
+        row.hit:run("OnEnter")
+        if options and options.leave then
+            row.hit:run("OnLeave")
+        end
+        return row.hit
     end
 
     ---@param frame table
     ---@param name string
     ---@return boolean whether the row saying `name` has a tooltip on it at all
     local function pointable(frame, name)
-        for _, fontString in ipairs((regionsOf(frame))) do
-            if fontString.shown and fontString.template == ROW_FONT and fontString.justify == "LEFT"
-                and (fontString.text or ""):find(name, 1, true) then
-                return fontString.scripts.OnEnter ~= nil
-            end
-        end
-        error("no row saying " .. name .. " on screen")
+        return hitFor(frame, name).scripts.OnEnter ~= nil
     end
 
     ---Whether the row saying `name` answers a click at all — both halves of what that takes,
@@ -520,13 +608,8 @@ describe("ns.newResultsWindow", function()
     ---@param name string
     ---@return boolean
     local function clickable(frame, name)
-        for _, fontString in ipairs((regionsOf(frame))) do
-            if fontString.shown and fontString.template == ROW_FONT and fontString.justify == "LEFT"
-                and (fontString.text or ""):find(name, 1, true) then
-                return fontString.mouseEnabled == true and fontString.scripts.OnMouseUp ~= nil
-            end
-        end
-        error("no row saying " .. name .. " on screen")
+        local hit = hitFor(frame, name)
+        return hit.mouseEnabled == true and hit.scripts.OnClick ~= nil
     end
 
     ---The tooltip as it reads: the title first, then `left` or `left → right` per line.
@@ -1014,34 +1097,18 @@ describe("ns.newResultsWindow", function()
                     assert.equal(1, recorded.tooltip.hidden)
                 end)
 
-                -- The client keeps a region's click flag and its motion flag apart, and
-                -- OnEnter and OnLeave are the second of them: a row given only the first is
-                -- clickable and cannot be pointed at, which is a tooltip that is wired up
-                -- perfectly and never opens. Every row here is a font string rather than a
-                -- frame, so the flag has to be asked for by name.
-                it("takes mouse motion, not only clicks, on the row it hangs the tooltip on", function()
+                -- Rows are pooled, so the mouse comes off with the tooltip: a row that
+                -- swallowed the pointer for a handler it no longer has is a dead spot on the
+                -- frame the panel is dragged around by.
+                it("takes the mouse back off a row reused for something else", function()
                     local window, frames = newWindow({ accountStanding = standingSource(nil) })
                     window.update(summary(gained()))
                     expand(frames[1], "Reputation")
-
-                    local row = labelFor(frames[1], "Dream Wardens")
-
-                    assert.is_true(row.mouseEnabled)
-                    assert.is_true(row.motionEnabled)
-                end)
-
-                -- Rows are pooled, so the flag comes off with the tooltip: a row that swallowed
-                -- motion for a handler it no longer has is a dead spot on the frame the panel
-                -- is dragged around by.
-                it("takes the motion back off a row reused for something else", function()
-                    local window, frames = newWindow({ accountStanding = standingSource(nil) })
-                    window.update(summary(gained()))
-                    expand(frames[1], "Reputation")
-                    local row = labelFor(frames[1], "Dream Wardens")
+                    local hit = hitFor(frames[1], "Dream Wardens")
 
                     window.update(summary({ reputation = {} }))
 
-                    assert.is_false(row.motionEnabled)
+                    assert.is_false(hit.mouseEnabled)
                 end)
 
                 it("anchors to the cursor, so the line pointed at is the one answered", function()
@@ -1092,6 +1159,100 @@ describe("ns.newResultsWindow", function()
 
                     assert.is_false(pointable(frames[1], "Dream Wardens"))
                 end)
+            end)
+        end)
+
+        -- The row says what one hour of play did to a standing. Everything else about that
+        -- standing — the levels already passed, the rewards waiting, the tracking bar — lives
+        -- in the character pane, and a click is the shortest way there from a row that has
+        -- just made the player curious about it.
+        describe("a click on a faction the segment gained", function()
+            local ARGENT = 529
+
+            ---@param options table?
+            ---@param gain table? Fields of the reputation gain the row is drawn from.
+            ---@return table frame, table recorded
+            local function gaining(options, gain)
+                local window, frames, recorded = newWindow(options)
+                local drawn = { faction = "Argent Dawn", id = ARGENT, amount = 40 }
+                for key, value in pairs(gain or {}) do
+                    drawn[key] = value
+                end
+                if drawn.id == false then
+                    drawn.id = nil
+                end
+                window.update(summary({ reputationTotal = drawn.amount, reputation = { drawn } }))
+                expand(frames[1], "Reputation")
+                return frames[1], recorded
+            end
+
+            it("opens the character pane on the faction the row names", function()
+                local frame, recorded = gaining()
+
+                expand(frame, "Argent Dawn")
+
+                assert.same({ ARGENT }, recorded.factions)
+            end)
+
+            -- By the id the client answered with rather than by the name the chat line
+            -- announced, which is the same distinction the account's standings are filed
+            -- under: the pane knows nothing about "Argent Dawn" as a string.
+            it("sends the id the client placed the faction by", function()
+                local frame, recorded = gaining({}, { id = 1090, faction = "Kirin Tor" })
+
+                expand(frame, "Kirin Tor")
+
+                assert.same({ 1090 }, recorded.factions)
+            end)
+
+            -- A gain parsed out of a chat line for a faction the client would not name — an
+            -- account-wide line read on a character that has never met them — has no id, and
+            -- so has no row in the pane to stand on. It must not take the mouse to say so.
+            it("leaves a gain the client would not place unclickable", function()
+                local frame = gaining({}, { id = false })
+
+                assert.is_false(clickable(frame, "Argent Dawn"))
+                assert.is_false(hitFor(frame, "Argent Dawn").mouseEnabled)
+            end)
+
+            -- And that is independent of the tooltip: the account's standings with a faction
+            -- are known by more than one thing at once, so a gain with nowhere to click still
+            -- has something to say when it is pointed at. The two were one flag on one region
+            -- when both hung off the row's text, and separating them is most of the point of
+            -- the hit area.
+            it("still opens the standings of a gain that has nowhere to click", function()
+                local frame, recorded = gaining({
+                    accountStanding = function()
+                        local best = {
+                            character = "Alt-Ravencrest",
+                            standing = "Exalted",
+                            rank = 8,
+                            system = "reaction",
+                            at = NOW - 24 * 60 * 60,
+                        }
+                        return {
+                            id = ARGENT,
+                            faction = "Argent Dawn",
+                            accountWide = false,
+                            best = best,
+                            characters = { best },
+                        }
+                    end,
+                }, { id = false })
+
+                assert.is_false(clickable(frame, "Argent Dawn"))
+                pointAt(frame, "Argent Dawn")
+
+                assert.equal(1, recorded.tooltip.shown)
+                assert.equal("Argent Dawn", recorded.tooltip.lines[1].text)
+            end)
+
+            -- The dep is optional, so this is the panel on a build that was wired no pane to
+            -- send anybody to. The row is drawn exactly as it always was and answers nothing.
+            it("leaves the row alone where the build wired no reputation pane", function()
+                local frame = gaining({ openers = false })
+
+                assert.is_false(clickable(frame, "Argent Dawn"))
             end)
         end)
 
@@ -1523,15 +1684,6 @@ describe("ns.newResultsWindow", function()
                 return frames[1], recorded
             end
 
-            ---Clicks the row saying `name`. The same reach `expand` makes — a row and the
-            ---heading over it are both a font string with a handler on it, as far as the panel
-            ---is concerned — said with the word that fits what it is being used for here.
-            ---@param frame table
-            ---@param name string
-            local function click(frame, name)
-                expand(frame, name)
-            end
-
             -- The row already names the mount; the click is what gets the player to it. The
             -- journal's own page is where a mount is favourited, renamed and summoned from, and
             -- finding it by hand means opening Collections and typing the name back in.
@@ -1762,11 +1914,7 @@ describe("ns.newResultsWindow", function()
             }))
 
             expand(frames[1], "Achievements")
-            for _, fontString in ipairs((regionsOf(frames[1]))) do
-                if fontString.text == "  Explore" then
-                    fontString:run("OnMouseUp", "LeftButton")
-                end
-            end
+            hitFor(frames[1], "  Explore"):run("OnClick", "LeftButton")
 
             assert.same({ 42 }, recorded.achievements)
         end)
@@ -1830,6 +1978,60 @@ describe("ns.newResultsWindow", function()
             assert.equal("completed", valueFor(rowsOf(frames[1]), "  Daily rounds"))
         end)
 
+        -- Every quest on this panel has already been handed in, so there is no log entry left
+        -- to open and no pin left to fly to. What a click can still answer is "what was that
+        -- one", which is the question a row saying nothing but a name and a colour is most
+        -- likely to have raised.
+        describe("a click on a quest that was completed", function()
+            local QUEST = 7848
+            local TITLE = "Deep Ocean, Vast Sea"
+
+            ---@param options table?
+            ---@param event table? Fields of the quest the row is drawn from. `id = false`
+            ---files it without one, which a nil written into an overrides table cannot say.
+            ---@return table frame, table recorded
+            local function turnedIn(options, event)
+                local window, frames, recorded = newWindow(options)
+                local drawn = { id = QUEST, name = TITLE, accountFirst = true }
+                for key, value in pairs(event or {}) do
+                    drawn[key] = value
+                end
+                if drawn.id == false then
+                    drawn.id = nil
+                end
+                window.update(summary({ quests = { drawn } }))
+                expand(frames[1], "Quests")
+                return frames[1], recorded
+            end
+
+            it("puts up the quest the row names", function()
+                local frame, recorded = turnedIn()
+
+                expand(frame, TITLE)
+
+                assert.same({ QUEST }, recorded.quests)
+            end)
+
+            -- The tally files a quest with whatever the client said about it, and one it would
+            -- not name an id for is a row with nothing to look anything up by. It still draws,
+            -- because the name is news, and it answers no click rather than becoming a dead
+            -- spot on the frame the player drags the panel around by.
+            it("leaves a quest filed without an id unclickable", function()
+                local frame = turnedIn({}, { id = false, name = "A remembered errand" })
+
+                assert.is_false(clickable(frame, "A remembered errand"))
+                assert.is_false(hitFor(frame, "A remembered errand").mouseEnabled)
+            end)
+
+            -- The dep is optional, so this is the panel on a build that was wired nowhere to
+            -- send the click. The row is drawn exactly as it always was.
+            it("leaves the row alone where the build wired nowhere to open it", function()
+                local frame = turnedIn({ openers = false })
+
+                assert.is_false(clickable(frame, TITLE))
+            end)
+        end)
+
         it("previews a transmog on left click and opens its source on right click", function()
             local window, frames, recorded = newWindow()
             window.update(summary({
@@ -1837,13 +2039,11 @@ describe("ns.newResultsWindow", function()
             }))
 
             expand(frames[1], "Transmog")
-            for _, fontString in ipairs((regionsOf(frames[1]))) do
-                if fontString.text == "  Named item 19019" then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    fontString:run("OnMouseUp", "RightButton")
-                    break
-                end
-            end
+            -- Looked up again between the two, because the first click repaints the panel and
+            -- the row is pooled: the hit area is the same frame, but asking for it afresh is
+            -- what keeps the test honest about that rather than assuming it.
+            hitFor(frames[1], "Named item 19019"):run("OnClick", "LeftButton")
+            hitFor(frames[1], "Named item 19019"):run("OnClick", "RightButton")
 
             assert.same({ 19019 }, recorded.previews)
             assert.same({ 11 }, recorded.collections)
@@ -1940,11 +2140,6 @@ describe("ns.newResultsWindow", function()
             ---@param frame table
             ---@param name string
             ---@param button string
-            local function clickRow(frame, name, button)
-                local label = regionsFor(frame, name)
-                label:run("OnMouseUp", button)
-            end
-
             ---Opens the block and hands back the panel's frame, which is every one of these
             ---tests' first two lines: a transmog row is not drawn until the heading over it
             ---has been clicked.
@@ -2167,7 +2362,7 @@ describe("ns.newResultsWindow", function()
                 it(case.what, function()
                     local frame, recorded = showing({ set = membership(), shift = case.shift })
 
-                    clickRow(frame, ROW, case.button)
+                    click(frame, ROW, case.button)
 
                     assert.same(case.previews or {}, recorded.previews)
                     assert.same(case.collections or {}, recorded.collections)
@@ -2194,7 +2389,7 @@ describe("ns.newResultsWindow", function()
                 it("falls back to the piece and " .. case.what, function()
                     local frame, recorded = showing({ shift = true })
 
-                    clickRow(frame, ROW, case.button)
+                    click(frame, ROW, case.button)
 
                     assert.same(case.previews or {}, recorded.previews)
                     assert.same(case.collections or {}, recorded.collections)
@@ -2241,7 +2436,7 @@ describe("ns.newResultsWindow", function()
                         setActions = case.options.setActions,
                     })
 
-                    clickRow(frame, ROW, case.button)
+                    click(frame, ROW, case.button)
 
                     assert.same(case.previews or {}, recorded.previews)
                     assert.same(case.collections or {}, recorded.collections)
@@ -2256,7 +2451,7 @@ describe("ns.newResultsWindow", function()
             it("still opens a set the client named no sources for", function()
                 local frame, recorded = showing({ shift = true, set = membership({ sources = {} }) })
 
-                clickRow(frame, ROW, "RightButton")
+                click(frame, ROW, "RightButton")
 
                 assert.same({ SET }, recorded.setCollections)
                 assert.same({}, recorded.collections)
@@ -2269,28 +2464,14 @@ describe("ns.newResultsWindow", function()
             it("answers the same row both ways as shift goes down between two clicks", function()
                 local frame, recorded = showing({ set = membership() })
 
-                clickRow(frame, ROW, "LeftButton")
+                click(frame, ROW, "LeftButton")
                 recorded.holdShift(true)
-                clickRow(frame, ROW, "LeftButton")
+                click(frame, ROW, "LeftButton")
 
                 assert.same({ ITEM }, recorded.previews)
                 assert.same({ { id = ITEM, sources = SOURCES } }, recorded.setPreviews)
             end)
         end)
-
-        ---Clicks the first row whose text contains `needle`, which is how a heading is
-        ---reached without spelling out the icon markup its label is built from.
-        ---@param frame table
-        ---@param needle string
-        local function clickContaining(frame, needle)
-            for _, fontString in ipairs((regionsOf(frame))) do
-                if fontString.shown and (fontString.text or ""):find(needle, 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    return
-                end
-            end
-            error("no row containing " .. needle .. " to click")
-        end
 
         -- A tick, a bullet or an arrow that the client's font has no glyph for draws as an
         -- empty box, which is what a reviewed transmog used to be marked with (issue #83).
@@ -2325,10 +2506,10 @@ describe("ns.newResultsWindow", function()
                 "Achievements", "Currency", "Level ups", "Mounts", "Pets", "Quests",
                 "Reputation", "Toys", "Housing items", "Housing levels", "Transmog",
             }) do
-                clickContaining(frames[1], heading)
+                expand(frames[1], heading)
             end
             -- Reviewing one marks it, which is the state the missing glyph appeared in.
-            clickContaining(frames[1], "Named item 19019")
+            click(frames[1], "Named item 19019")
             -- And the list open behind it, which is a second frame full of names the addon
             -- built rather than took off the client.
             clickTitle(frames[1])
@@ -2341,6 +2522,208 @@ describe("ns.newResultsWindow", function()
                     end
                 end
             end
+        end)
+    end)
+
+    ---What the pointer actually finds on a row, which is a question separate from what the
+    ---row would do if it were reached.
+    ---
+    ---Every row here used to be two font strings with the handlers hung off them, and a font
+    ---string is a region: the client hands a region a click readily enough — which is why the
+    ---headings have always opened and closed — but never a mouse-over. So all three tooltips
+    ---on this panel were wired to scripts nothing ever ran, and they shipped that way twice,
+    ---because a fake font string will happily record a script the real client would never
+    ---call. A frame over the row is what answers the pointer now, and these are the tests
+    ---that say so rather than saying "a handler exists somewhere".
+    describe("what answers the pointer", function()
+        ---A gain, a currency and a drop that each have something to say on hover, and the
+        ---deps that give them something to say.
+        ---@return table options, table drawn
+        local function talkative()
+            return {
+                accountStanding = function(factionID)
+                    local best = {
+                        character = "Alt-Ravencrest",
+                        standing = "Renown 22",
+                        rank = 22,
+                        system = "renown",
+                        at = NOW - 3 * 24 * 60 * 60,
+                    }
+                    return {
+                        id = factionID,
+                        faction = "Dream Wardens",
+                        accountWide = false,
+                        best = best,
+                        characters = { best },
+                    }
+                end,
+                accountCurrency = function(id)
+                    return {
+                        id = id,
+                        name = "Honor",
+                        total = 14360,
+                        accountWide = false,
+                        characters = {
+                            { character = "Alt-Ravencrest", name = "Honor", total = 1910, at = NOW },
+                        },
+                        oldest = NOW,
+                    }
+                end,
+                set = {
+                    setID = 1783,
+                    name = "Bloodfang Armor",
+                    collected = 3,
+                    total = 8,
+                    sources = { 101, 102 },
+                },
+            }, {
+                reputationTotal = 250,
+                reputation = { {
+                    faction = "Dream Wardens", id = 2574, amount = 250,
+                    standing = "Renown 8", current = 500, max = 2500, rank = 8, system = "renown",
+                } },
+                currencyTotal = 7,
+                currencies = { { id = 1, name = "Honor", amount = 7 } },
+                transmogs = { { id = 19019, sourceID = 11, newAppearance = true } },
+            }
+        end
+
+        ---The panel with all three blocks open, which is where every one of these starts.
+        ---@return table frame, table recorded
+        local function opened()
+            local options, drawn = talkative()
+            local window, frames, recorded = newWindow(options)
+            window.update(summary(drawn))
+            for _, heading in ipairs({ "Reputation", "Currency", "Transmog" }) do
+                expand(frames[1], heading)
+            end
+            return frames[1], recorded
+        end
+
+        -- All three, because all three were broken by the same thing and any one of them
+        -- fixed alone would leave the other two silent in exactly the same way.
+        for _, case in ipairs({
+            { what = "a faction's account-wide standings", row = "Dream Wardens" },
+            { what = "what the account holds of a currency", row = "Honor" },
+            { what = "the set an appearance belongs to", row = "Named item 19019" },
+        }) do
+            it("hands " .. case.what .. " to a frame, not to the row's text", function()
+                local frame = opened()
+
+                local hit = hitFor(frame, case.row)
+
+                -- A Button rather than a region, mouse-enabled, with both halves of a hover
+                -- on it. Nothing less than all four is a tooltip that opens in the game.
+                assert.equal("Button", hit.frameType)
+                assert.is_true(hit.mouseEnabled)
+                assert.is_function(hit.scripts.OnEnter)
+                assert.is_function(hit.scripts.OnLeave)
+            end)
+
+            it("opens " .. case.what .. " when the row is pointed at", function()
+                local frame, recorded = opened()
+
+                pointAt(frame, case.row, { leave = true })
+
+                assert.equal(1, recorded.tooltip.shown)
+                assert.equal(1, recorded.tooltip.hidden)
+            end)
+        end
+
+        -- And nowhere else on the panel. A handler left behind on the text under a hit area
+        -- would keep every test above green while the panel went on doing the thing the hit
+        -- area was introduced to stop, so this is asserted against the whole body at once
+        -- rather than against the rows the cases above happen to name.
+        it("hangs no hover on any font string the panel draws", function()
+            local frame = opened()
+
+            for _, fontString in ipairs((regionsOf(frame))) do
+                assert.is_nil(fontString.scripts.OnEnter,
+                    "a hover hung on the font string " .. tostring(fontString.text))
+                assert.is_nil(fontString.scripts.OnLeave,
+                    "a hover hung on the font string " .. tostring(fontString.text))
+            end
+        end)
+
+        -- The client's own mouse-over wash, and only where the row answers to it: a highlight
+        -- following the pointer across rows that do nothing is the panel promising something
+        -- it will not deliver.
+        for _, case in ipairs({
+            { what = "a row that answers a click", row = "Reputation", alpha = 1 },
+            { what = "a row that answers nothing", row = "Loot value", alpha = 0 },
+        }) do
+            it("lights the highlight on " .. case.what .. " and not on the other", function()
+                local frame = opened()
+
+                local hit = hitFor(frame, case.row)
+
+                assert.equal(case.alpha, hit:GetHighlightTexture():GetAlpha())
+            end)
+        end
+
+        describe("the pool the rows come out of", function()
+            -- The same hit area, drawing something else. This is the pooling failure with
+            -- teeth: a frame that kept the faction's tooltip and the faction's click while
+            -- its text became a quest would open the wrong thing under the pointer and send
+            -- the player somewhere they never asked to go.
+            it("carries only what the row it is now drawing put on it", function()
+                local window, frames, recorded = newWindow({
+                    accountStanding = function(factionID)
+                        local best = { character = "Alt-Ravencrest", standing = "Renown 22",
+                            rank = 22, system = "renown", at = NOW }
+                        return { id = factionID, faction = "Dream Wardens", accountWide = false,
+                            best = best, characters = { best } }
+                    end,
+                })
+                window.update(summary({
+                    reputationTotal = 250,
+                    reputation = { { faction = "Dream Wardens", id = 2574, amount = 250 } },
+                }))
+                expand(frames[1], "Reputation")
+                local hit = hitFor(frames[1], "Dream Wardens")
+
+                window.update(summary({ quests = { { id = 7848, name = "Deep Ocean" } } }))
+                expand(frames[1], "Quests")
+
+                -- The very same frame, which is what makes the rest of this worth asserting.
+                assert.equal(hit, hitFor(frames[1], "Deep Ocean"))
+                assert.is_nil(hit.scripts.OnEnter)
+                assert.is_nil(hit.scripts.OnLeave)
+                click(frames[1], "Deep Ocean")
+                assert.same({ 7848 }, recorded.quests)
+                assert.same({}, recorded.factions)
+            end)
+
+            -- A hidden frame cannot be pointed at or clicked, so leaving the handlers on a
+            -- row that fell out of the render would do no harm today. It is still cleared:
+            -- the pool's invariant is that a row carries only what the line it is currently
+            -- drawing put there, and a row that is only harmless because it happens to be
+            -- hidden is the exception that makes the rule unreadable.
+            it("strips a row that fell out of the render right down", function()
+                local window, frames = newWindow({
+                    accountStanding = function(factionID)
+                        local best = { character = "Alt-Ravencrest", standing = "Renown 22",
+                            rank = 22, system = "renown", at = NOW }
+                        return { id = factionID, faction = "Dream Wardens", accountWide = false,
+                            best = best, characters = { best } }
+                    end,
+                })
+                window.update(summary({
+                    reputationTotal = 250,
+                    reputation = { { faction = "Dream Wardens", id = 2574, amount = 250 } },
+                }))
+                expand(frames[1], "Reputation")
+                local hit = hitFor(frames[1], "Dream Wardens")
+
+                window.update(summary())
+
+                assert.is_false(hit.shown)
+                assert.is_false(hit.mouseEnabled)
+                assert.equal(0, hit:GetHighlightTexture():GetAlpha())
+                assert.is_nil(hit.scripts.OnClick)
+                assert.is_nil(hit.scripts.OnEnter)
+                assert.is_nil(hit.scripts.OnLeave)
+            end)
         end)
     end)
 
@@ -2797,6 +3180,23 @@ describe("ns.newResultsWindow", function()
 
             assert.equal("BOTTOMRIGHT", frames[1].sizingFrom)
             assert.same({ { width = 300, height = 400, locked = false } }, recorded.sizes)
+        end)
+
+        -- The grip and the body's last row share a corner, and the grip overhangs that row by
+        -- about six pixels — which is the whole of what there is to grab. The rows used to be
+        -- regions of a frame the grip was created after, and creation order settled it; they
+        -- are frames of their own now, nested a level deeper inside the viewport, and a nested
+        -- frame stacks above its ancestors' siblings whenever it was made. So the grip has to
+        -- say where it belongs rather than being left to the order it was built in, or the one
+        -- control that cannot be reached any other way is swallowed by a row.
+        it("keeps the resize grip over the rows it shares a corner with", function()
+            local window, frames = newWindow()
+            window.update(long(30))
+            expand(frames[1], "Level ups")
+            local _, grip = handlesOf(frames)
+            local _, content = viewportOf(frames)
+
+            assert.is_true(grip:GetFrameLevel() > content:GetFrameLevel())
         end)
 
         it("relays out the body at the width it was dragged to", function()

@@ -122,6 +122,17 @@ read_globals = {
     "MountJournal_SelectByMountID",
     "PetJournal_SelectPet",
     "PetJournal_SelectSpecies",
+    -- What a click on a finished quest opens. `SetItemRef` is the client's own handler for a
+    -- hyperlink somebody clicked, and a quest reference is the only door into a quest the
+    -- character is no longer carrying; `GetQuestLink` is the text that would have been clicked,
+    -- and is nil-checked because it answers for a quest the client still has data for and not
+    -- necessarily for one turned in weeks ago.
+    "SetItemRef",
+    "GetQuestLink",
+    -- The character pane, and the reputation tab of it. `ToggleCharacter` takes the tab's frame
+    -- name; `ReputationFrame` is that frame, asked only whether it is already up.
+    "ToggleCharacter",
+    "ReputationFrame",
     "FACTION_STANDING_INCREASED",
     "FACTION_STANDING_INCREASED_BONUS",
     "FACTION_STANDING_INCREASED_ACCOUNT_WIDE",
