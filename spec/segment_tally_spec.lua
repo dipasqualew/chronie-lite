@@ -629,6 +629,96 @@ describe("ns.newSegmentTally", function()
 
             assert.same({ { faction = "Argent Dawn", amount = 250 } }, tally.summary().reputation)
         end)
+
+        -- A faction that could not be placed at the moment of the gain is not a faction that
+        -- never can be. A chat line carries a localised name, and turning one into an id can take
+        -- a walk of the client's whole faction range that had not finished when the line arrived
+        -- — see `ns.newFactionIndex`. Asking again at summary time is what lets a row that drew as
+        -- a bare "+250" grow its bar, its tooltip and its click as soon as anything can say which
+        -- faction it is; without it the row stays dead until the character happens to earn with
+        -- that same faction again, which in a raid week may be never.
+        describe("a faction the client could not place at the time", function()
+            ---A tally whose client starts out unable to place anything, and a handle on the
+            ---table it answers from so a test can let the walk "land" between two summaries.
+            ---@return SegmentTally tally, table placed, fun(): integer asked
+            local function newLateTally()
+                local placed = {}
+                local asked = 0
+                local tally = ns.newSegmentTally({
+                    factionFormats = FACTION_FORMATS,
+                    factionState = function(faction)
+                        asked = asked + 1
+                        return placed[faction]
+                    end,
+                })
+                return tally, placed, function()
+                    return asked
+                end
+            end
+
+            it("carries the standing in a later summary once the client can place it", function()
+                local tally, placed = newLateTally()
+                tally.begin(0)
+                tally.reputation("Your Argent Dawn reputation has increased by 250.")
+
+                assert.same({ { faction = "Argent Dawn", amount = 250 } },
+                    tally.summary().reputation)
+
+                placed["Argent Dawn"] = {
+                    id = 529,
+                    standing = "Honored",
+                    current = 3000,
+                    max = 12000,
+                    rank = 6,
+                    system = "reaction",
+                }
+
+                assert.same({
+                    {
+                        faction = "Argent Dawn",
+                        id = 529,
+                        amount = 250,
+                        standing = "Honored",
+                        current = 3000,
+                        max = 12000,
+                        rank = 6,
+                        system = "reaction",
+                    },
+                }, tally.summary().reputation)
+            end)
+
+            -- Re-asking for what is missing, not re-asking for everything. The panel is redrawn
+            -- on every event that touches the tally, and each redraw summarises: a faction placed
+            -- when the gain landed would otherwise cost a client lookup per faction per redraw,
+            -- for an answer already in hand.
+            it("is asked about once more per summary only while it is still unplaced", function()
+                local tally, placed, asked = newLateTally()
+                tally.begin(0)
+                placed["Argent Dawn"] = { id = 529, standing = "Honored", current = 3000,
+                    max = 12000 }
+
+                tally.reputation("Your Argent Dawn reputation has increased by 250.")
+                local afterGain = asked()
+                tally.summary()
+                tally.summary()
+                tally.summary()
+
+                assert.equal(1, afterGain)
+                assert.equal(afterGain, asked())
+            end)
+
+            it("still summarises as a name and an amount when nothing ever places it", function()
+                local tally = newLateTally()
+                tally.begin(0)
+                tally.reputation("Your Argent Dawn reputation has increased by 250.")
+
+                tally.summary()
+
+                assert.same({ { faction = "Argent Dawn", amount = 250 } },
+                    tally.summary().reputation)
+                assert.equal(250, tally.summary().reputationTotal)
+            end)
+        end)
     end)
 
     describe("currency earned", function()

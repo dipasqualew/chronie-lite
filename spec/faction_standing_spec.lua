@@ -359,6 +359,186 @@ describe("ns.readFactionState", function()
             max = 2000, rank = 1500, system = "friendship" }, standing)
     end)
 
+    -- The three roads from a localised name to a faction, and which of them was taken.
+    --
+    -- A reputation gain is announced in chat and nowhere else, and a chat line carries the
+    -- name rather than the id everything downstream files the standing under. So this lookup
+    -- is the whole panel: a name that reaches no faction arrives as a name and a number with no
+    -- id and no standing, which is a row with no bar under it, no tooltip over it, nothing for
+    -- a click to open and nothing for the account rollup to add up.
+    describe("the roads from a name to a faction", function()
+        ---A client that records which of the three roads was asked, so a test can say not only
+        ---that the faction was reached but which road reached it — the difference between a
+        ---lookup that works and one that only works because a road it was meant to fall through
+        ---to happened to answer.
+        ---
+        ---Every road is answered off the same faction wherever a test sets it up that way: they
+        ---are one faction reached three ways, and a test that wants one road on its own withholds
+        ---the others rather than pointing them at a different faction.
+        ---@param options table? `{ named, byID, index, pane, without }`
+        ---@return table clients, table asked how many times each road was consulted
+        local function roads(options)
+            options = options or {}
+            local asked = { byName = 0, byID = 0, pane = 0, resolve = 0 }
+            local pane = options.pane or {}
+
+            local reputation = {
+                GetFactionDataByName = function(name)
+                    asked.byName = asked.byName + 1
+                    local named = options.named
+                    return named and named.name == name and named or nil
+                end,
+                GetFactionDataByID = function(factionID)
+                    asked.byID = asked.byID + 1
+                    return (options.byID or {})[factionID]
+                end,
+                GetNumFactions = function()
+                    return #pane
+                end,
+                GetFactionDataByIndex = function(index)
+                    asked.pane = asked.pane + 1
+                    return pane[index]
+                end,
+            }
+            for _, name in ipairs(options.without or {}) do
+                reputation[name] = nil
+            end
+
+            local clients = { reputation = reputation }
+            -- Absent rather than empty where a test says so: `ns.readHoldings` and the census
+            -- both call in with a bag that has no index in it at all.
+            if options.index then
+                clients.resolveFaction = function(name)
+                    asked.resolve = asked.resolve + 1
+                    asked.resolvedName = name
+                    return options.index[name]
+                end
+            end
+            return clients, asked
+        end
+
+        ---Every road pointed at the same faction, so that whichever roads a test then withholds,
+        ---the ones left could each have answered on their own.
+        ---@param options table? `{ without, index }`
+        ---@return table clients, table asked
+        local function everyRoad(options)
+            options = options or {}
+            return roads({
+                named = HONORED,
+                byID = { [933] = HONORED },
+                index = options.index ~= false and { ["The Consortium"] = 933 } or nil,
+                pane = { HONORED },
+                without = options.without,
+            })
+        end
+
+        -- One call and the whole question, where the build has it. The other two roads cost a
+        -- client call each at best and a walk of the pane at worst, and there is nothing they
+        -- could add to an answer already in hand.
+        it("asks the client by name first and asks nothing else once that answers", function()
+            local clients, asked = everyRoad()
+
+            assert.equal(933, ns.readFactionState(clients, "The Consortium").id)
+
+            assert.equal(1, asked.byName)
+            assert.equal(0, asked.resolve)
+            assert.equal(0, asked.byID)
+            assert.equal(0, asked.pane)
+        end)
+
+        -- **The regression that made the panel dead.** `GetFactionDataByName` being present is
+        -- not the same as it answering: it says nothing for most of the game's factions on the
+        -- builds this addon runs on, and returning early on that nil meant the two roads behind
+        -- it were never taken. Every gain then arrived as a name and a number, which is exactly
+        -- what the player saw — a faction row reading "+250" with no bar under it.
+        it("falls through to the index when the name call is there but answers nothing", function()
+            local clients, asked = roads({
+                byID = { [933] = HONORED },
+                index = { ["The Consortium"] = 933 },
+            })
+
+            local standing = ns.readFactionState(clients, "The Consortium")
+
+            assert.equal(933, standing.id)
+            assert.equal(3000, standing.current)
+            assert.equal(12000, standing.max)
+            assert.equal(1, asked.byName)
+            assert.equal(1, asked.resolve)
+            assert.equal("The Consortium", asked.resolvedName)
+        end)
+
+        -- The build in #44, where the name call was not defined at all. The road behind it is
+        -- the one that reaches a legacy faction and one folded under a collapsed header, which
+        -- between them are most of the factions in the game.
+        it("reaches the faction by id on a build that has no name call at all", function()
+            local clients, asked = everyRoad({ without = { "GetFactionDataByName" } })
+            -- Withheld so the answer can only have come from the id road.
+            clients.reputation.GetNumFactions = nil
+            clients.reputation.GetFactionDataByIndex = nil
+
+            assert.equal(933, ns.readFactionState(clients, "The Consortium").id)
+
+            assert.equal(1, asked.resolve)
+            assert.equal(1, asked.byID)
+        end)
+
+        -- The index answers nil until it has walked, and the first gain of a session always
+        -- arrives before it has. The pane is the only road that can answer at that moment, so it
+        -- stays exactly where it was: last, unconditional, and still working.
+        it("walks the pane when neither the name nor the index places the faction", function()
+            local clients, asked = roads({ index = {}, pane = { HONORED } })
+
+            assert.equal(933, ns.readFactionState(clients, "The Consortium").id)
+
+            assert.equal(1, asked.byName)
+            assert.equal(1, asked.resolve)
+            assert.is_true(asked.pane > 0)
+        end)
+
+        -- An id is only an answer if the client will describe it. One that comes back with
+        -- nothing is the same as no id at all, and the road behind it must still be taken.
+        it("walks the pane when the index names an id the client will not describe", function()
+            local clients, asked = roads({
+                index = { ["The Consortium"] = 933 },
+                pane = { HONORED },
+            })
+
+            assert.equal(933, ns.readFactionState(clients, "The Consortium").id)
+
+            assert.equal(1, asked.byID)
+            assert.is_true(asked.pane > 0)
+        end)
+
+        it("has nothing to say about a faction none of the three roads places", function()
+            local clients, asked = roads({ index = {} })
+
+            assert.is_nil(ns.readFactionState(clients, "Bilgewater Cartel"))
+
+            assert.equal(1, asked.byName)
+            assert.equal(1, asked.resolve)
+        end)
+
+        -- `ns.readHoldings` and the reputation census both call in with a bag that carries no
+        -- index at all, because neither of them starts from a name. A missing seam is not an
+        -- error and it does not change what the roads either side of it do.
+        for _, case in ipairs({
+            { what = "the name call answers", without = nil },
+            { what = "only the pane answers", without = { "GetFactionDataByName" } },
+        }) do
+            it("reads the faction exactly as before, with no index passed, when " .. case.what,
+                function()
+                    local clients = everyRoad({ index = false, without = case.without })
+
+                    local standing = ns.readFactionState(clients, "The Consortium")
+
+                    assert.equal(933, standing.id)
+                    assert.equal("The Consortium", standing.name)
+                    assert.equal(3000, standing.current)
+                    assert.equal(12000, standing.max)
+                end)
+        end
+    end)
+
     describe("asked by id instead", function()
         -- The whole reason the call is worth having, and issue #254 in one test: the pane
         -- lists nothing at all here — no `GetFactionDataByName` to ask and no rows to walk —

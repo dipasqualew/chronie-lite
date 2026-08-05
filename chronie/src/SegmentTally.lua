@@ -1074,6 +1074,16 @@ function ns.newSegmentTally(deps)
             local reputation = {}
             local reputationTotal = 0
             for faction, entry in pairs(segment.reputation) do
+                -- Asked again where the gain itself could not be placed, and only there. A name
+                -- is turned into an id by a walk that may not have finished when the chat line
+                -- arrived — see `ns.newFactionIndex` — so a faction that was a name and a number
+                -- at the moment it was earned becomes a standing as soon as anything can say
+                -- which faction it is. The panel is redrawn on every event that touches the
+                -- tally, so "as soon as" means the next thing that happens rather than the next
+                -- gain with that same faction.
+                if not entry.state then
+                    entry.state = factionState(faction)
+                end
                 local state = entry.state
                 reputation[#reputation + 1] = {
                     faction = faction,
