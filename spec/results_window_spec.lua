@@ -224,6 +224,27 @@ describe("ns.newResultsWindow", function()
     ---label in the body below it is hung off too.
     local PADDING = 12
 
+    ---The gap the panel leaves between two columns of a row.
+    local COLUMN_GAP = 8
+
+    ---The two columns a faction's row reserves, and what is left over for its name.
+    ---
+    ---A standing is three columns across one line: the faction on the left, how far into the
+    ---level it is centred over the bar, and what the segment moved it by on the right. The
+    ---middle and right are fixed at what the longest thing either ever says needs — a five
+    ---figure fraction, and a four figure gain — and the name gets everything they do not use,
+    ---because the name is the column an eye running down the block is actually reading.
+    local STANDING_CENTRE_WIDTH = 72
+    local STANDING_VALUE_WIDTH = 48
+
+    ---What a bar is filled with, and what the fill means. Purple is the account's colour and
+    ---green one character's, everywhere on this panel — so a bar filled purple is saying that
+    ---nobody on the account is known to have got further with this faction, and a green one is
+    ---saying somebody has. It is the only place the panel says a thing in a shape rather than
+    ---in a word, and it is the whole of what the "best" line under a faction used to say.
+    local BAR_BEST_COLOR = { 0.42, 0.28, 0.66, 0.95 }
+    local BAR_FILL_COLOR = { 0.24, 0.55, 0.29, 0.95 }
+
     ---The font template every row of the body and every row of the list is drawn in. The
     ---header's title is the one font string on the panel built in anything else, which is
     ---what keeps it out of the rows below it now that it is justified like them.
@@ -263,8 +284,12 @@ describe("ns.newResultsWindow", function()
     ---The progress bars on screen, in creation order. A bar is a track, the filled part of
     ---it and a caption centred over both; the caption is the one font string the window
     ---centres, which is what keeps it out of the label/value rows above.
+    ---
+    ---The fill's colour comes back with it, because on a standing the colour is not decoration:
+    ---it is the whole of what says whether anybody else on the account has got further. A bar
+    ---that reported its width and not its colour would be a bar read half way.
     ---@param frame table
-    ---@return table[] `{ { caption = string, filled = number, width = number }, ... }`
+    ---@return table[] `{ { caption = string, filled = number, width = number, color = number[] }, ... }`
     local function barsOf(frame)
         local fontStrings, textures = regionsOf(frame)
         local captions = {}
@@ -291,6 +316,7 @@ describe("ns.newResultsWindow", function()
                     caption = captions[#drawn + 1],
                     width = back.width,
                     filled = fill.shown and fill.width or 0,
+                    color = fill.shown and fill.color or nil,
                 }
             end
         end
@@ -539,6 +565,33 @@ describe("ns.newResultsWindow", function()
             error("no row saying " .. name .. " on screen")
         end
         return row.label
+    end
+
+    ---A faction's row, all three columns of it: the name on the left, how far into the level
+    ---the character is in the middle, and what the segment moved it by on the right.
+    ---
+    ---Two of those three are the row's own label and value; the middle one is the bar's
+    ---caption, which is a font string of another pool entirely and so is no part of a row.
+    ---What pairs it back up is where it was put down: all three columns are one line of the
+    ---panel, so all three share a top. Said that way rather than by counting captions off
+    ---against rows, because the count only works while every faction happens to draw a bar,
+    ---and "does this faction draw a bar at all" is one of the things being asked here.
+    ---@param frame table
+    ---@param name string
+    ---@return table `{ label = table, centre = table?, value = table, hit = table }`
+    local function standingFor(frame, name)
+        local row = rowSaying(frame, name)
+        if not row then
+            error("no faction saying " .. name .. " on screen")
+        end
+        local centre
+        for _, fontString in ipairs(bodyOf(frame).fontStrings) do
+            if fontString.shown and fontString.justify == "CENTER"
+                and topOf(fontString) == topOf(row.label) then
+                centre = fontString
+            end
+        end
+        return { label = row.label, centre = centre, value = row.value, hit = row.hit }
     end
 
     ---The hit area of the first row saying `name` — the frame the client would deliver a
@@ -800,7 +853,10 @@ describe("ns.newResultsWindow", function()
             assert.is_nil(valueForHeading(rowsOf(frames[1]), "Reputation"))
         end)
 
-        it("renders one indented signed line per faction", function()
+        -- The name sits against the panel's own left margin rather than indented under the
+        -- heading, because the row it is on is the bar: an indent would push the faction off
+        -- the track it is drawn over and leave a notch of colour in front of every name.
+        it("renders one signed row per faction", function()
             local window, frames = newWindow()
 
             window.update(summary({
@@ -814,8 +870,8 @@ describe("ns.newResultsWindow", function()
             assert.equal("+260", valueForHeading(rowsOf(frames[1]), "Reputation"))
             expand(frames[1], "Reputation")
             local lines = rowsOf(frames[1])
-            assert.equal("+250", valueFor(lines, "  Argent Dawn"))
-            assert.equal("+10", valueFor(lines, "  Timbermaw Hold"))
+            assert.equal("+250", valueFor(lines, "Argent Dawn"))
+            assert.equal("+10", valueFor(lines, "Timbermaw Hold"))
         end)
 
         -- Rows are pooled and reused across renders, so a faction from a busier summary
@@ -832,11 +888,16 @@ describe("ns.newResultsWindow", function()
 
             window.update(summary({ reputation = {} }))
 
-            assert.is_nil(valueFor(rowsOf(frames[1]), "  Argent Dawn"))
-            assert.is_nil(valueFor(rowsOf(frames[1]), "  Timbermaw Hold"))
+            assert.is_nil(valueFor(rowsOf(frames[1]), "Argent Dawn"))
+            assert.is_nil(valueFor(rowsOf(frames[1]), "Timbermaw Hold"))
         end)
 
-        it("draws a bar under each faction, filled to where the character stands", function()
+        -- The row *is* the bar. A faction used to take three lines — its name, a bar under it,
+        -- and a line naming whoever on the account was furthest along — and all three were
+        -- saying one thing, of which only the bar was saying it in a shape the eye reads
+        -- without stopping. So everything the other two carried is on the bar, in the tooltip
+        -- over it, or in what colour it is filled, and the block is a stack of bars.
+        it("draws each faction as the bar itself, filled to where the character stands", function()
             local window, frames = newWindow()
             window.update(summary({
                 reputationTotal = 250,
@@ -855,8 +916,92 @@ describe("ns.newResultsWindow", function()
 
             local bars = barsOf(frames[1])
             assert.equal(1, #bars)
-            assert.equal("Honored  6,000 / 12,000", bars[1].caption)
+            assert.equal("6,000 / 12,000", bars[1].caption)
             assert.equal(bars[1].width / 2, bars[1].filled)
+        end)
+
+        -- Three columns is what fits across a panel this narrow, and of the four things a
+        -- standing knows, the name of the level is the one the bar itself half draws: a bar
+        -- nearly full says "nearly there" without "Honored" beside it. So the level's name is
+        -- the first line of the tooltip and the row keeps the numbers, which are the thing the
+        -- shape of the bar cannot give back.
+        it("leaves the name of the level to the tooltip and keeps the numbers on the bar", function()
+            local window, frames = newWindow()
+            window.update(summary({
+                reputationTotal = 250,
+                reputation = {
+                    {
+                        faction = "Argent Dawn",
+                        amount = 250,
+                        standing = "Honored",
+                        current = 6000,
+                        max = 12000,
+                    },
+                },
+            }))
+
+            expand(frames[1], "Reputation")
+
+            local drawn = standingFor(frames[1], "Argent Dawn")
+            assert.equal("Argent Dawn", drawn.label.text)
+            assert.equal("6,000 / 12,000", drawn.centre.text)
+            assert.is_nil((drawn.label.text .. drawn.centre.text .. drawn.value.text):find("Honored"))
+        end)
+
+        -- Every column of a standing is one line of the panel, and the three of them are kept
+        -- apart by where they are put and how wide they are rather than by anything in the text.
+        -- The numbers are centred over the track so that a block of factions reads as a column
+        -- of fractions under each other whatever the factions are called, and the gain is right
+        -- justified in a column of its own so the signs line up under each other too.
+        it("keeps the three columns of a faction apart by width and justification", function()
+            local window, frames = newWindow()
+            window.update(summary({
+                reputationTotal = 250,
+                reputation = {
+                    {
+                        faction = "Argent Dawn",
+                        amount = 250,
+                        standing = "Honored",
+                        current = 6000,
+                        max = 12000,
+                    },
+                },
+            }))
+
+            expand(frames[1], "Reputation")
+
+            local drawn = standingFor(frames[1], "Argent Dawn")
+            local track = barsOf(frames[1])[1].width
+            assert.equal("LEFT", drawn.label.justify)
+            assert.equal("CENTER", drawn.centre.justify)
+            assert.equal("RIGHT", drawn.value.justify)
+            assert.equal(STANDING_CENTRE_WIDTH, drawn.centre.width)
+            assert.equal(STANDING_VALUE_WIDTH, drawn.value.width)
+            -- Whatever the fixed two do not use, so the name is the column that grows when the
+            -- panel is dragged wider.
+            assert.equal((track - STANDING_CENTRE_WIDTH) / 2 - COLUMN_GAP, drawn.label.width)
+        end)
+
+        -- One row per faction and one bar with it, rather than the three lines each used to
+        -- take. Counted rather than described, because "the block collapsed" is exactly a
+        -- statement about how many things are on screen.
+        it("spends one row and one bar on each faction", function()
+            local window, frames = newWindow()
+            window.update(summary({
+                reputationTotal = 260,
+                reputation = {
+                    { faction = "Argent Dawn", amount = 250, standing = "Honored", current = 1, max = 2 },
+                    { faction = "Timbermaw Hold", amount = 10, standing = "Friendly", current = 1, max = 4 },
+                },
+            }))
+
+            expand(frames[1], "Reputation")
+
+            -- The heading and the two factions, and nothing else in the block: the loot value,
+            -- the gold difference and the heading are the three rows a summary always draws.
+            local lines = rowsOf(frames[1])
+            assert.equal(5, #lines)
+            assert.equal(2, #barsOf(frames[1]))
         end)
 
         it("draws a full bar for a faction with nothing left to earn", function()
@@ -871,8 +1016,26 @@ describe("ns.newResultsWindow", function()
             expand(frames[1], "Reputation")
 
             local bars = barsOf(frames[1])
-            assert.equal("Exalted  1 / 1", bars[1].caption)
+            assert.equal("1 / 1", bars[1].caption)
             assert.equal(bars[1].width, bars[1].filled)
+        end)
+
+        -- The client will sometimes name a standing without giving the numbers behind it — an
+        -- account-wide faction read on a character that has never met them, a paragon level it
+        -- reports as a name and no track. The centre column is the only place the level's name
+        -- has to go, so it goes there rather than leaving the row saying nothing about where
+        -- the character stands.
+        it("names the level in the centre where the client gave no numbers", function()
+            local window, frames = newWindow()
+            window.update(summary({
+                reputationTotal = 40,
+                reputation = { { faction = "Argent Dawn", amount = 40, standing = "Exalted" } },
+            }))
+
+            expand(frames[1], "Reputation")
+
+            assert.equal("Exalted", standingFor(frames[1], "Argent Dawn").centre.text)
+            assert.equal("Exalted", barsOf(frames[1])[1].caption)
         end)
 
         it("draws an empty bar rather than none at the start of a level", function()
@@ -891,7 +1054,13 @@ describe("ns.newResultsWindow", function()
             assert.equal(0, bars[1].filled)
         end)
 
-        it("draws no bar for a faction the client could not place", function()
+        -- The case that used to vanish. A gain parsed out of a chat line for a faction the
+        -- client would neither name nor place got a line and no bar, so it sat in a block of
+        -- bars as the one row with nothing under it and read as a faction the panel had lost
+        -- track of. It gets a track like every other faction now, with nothing in it — which is
+        -- the honest "you gained, and we know no more than that" — and the gain, which is the
+        -- one thing that was never in doubt, is still on the row.
+        it("draws an empty track for a faction the client could not place", function()
             local window, frames = newWindow()
             window.update(summary({
                 reputationTotal = 40,
@@ -900,20 +1069,48 @@ describe("ns.newResultsWindow", function()
 
             expand(frames[1], "Reputation")
 
-            assert.same({}, barsOf(frames[1]))
-            assert.equal("+40", valueFor(rowsOf(frames[1]), "  Argent Dawn"))
+            local bars = barsOf(frames[1])
+            assert.equal(1, #bars)
+            assert.equal(0, bars[1].filled)
+            assert.equal("", bars[1].caption)
+            assert.equal("", standingFor(frames[1], "Argent Dawn").centre.text)
+            assert.equal("+40", valueFor(rowsOf(frames[1]), "Argent Dawn"))
+        end)
+
+        -- `groupDigits` puts the minus sign on itself, and the row used to write a "+" in front
+        -- of whatever arrived — so the first time a player was hit with a reputation loss the
+        -- panel would have told them they had gained "+-250". Signed the way the currency rows
+        -- are signed instead, which is the one spelling that reads both ways round.
+        it("signs a faction that was lost rather than gained", function()
+            local window, frames = newWindow()
+            window.update(summary({
+                reputationTotal = -250,
+                reputation = {
+                    {
+                        faction = "Bloodsail Buccaneers",
+                        amount = -250,
+                        standing = "Hated",
+                        current = 100,
+                        max = 36000,
+                    },
+                },
+            }))
+
+            expand(frames[1], "Reputation")
+
+            assert.equal("-250", valueFor(rowsOf(frames[1]), "Bloodsail Buccaneers"))
         end)
 
         describe("what the rest of the account has already done with the faction", function()
             -- The store keys its standings on the faction's own id rather than on the
             -- localised name a chat line used, so this stand-in answers for 2574 and for
             -- nothing else. A panel that asked it by the name would be handed nil and would
-            -- draw no "best" line at all, which is what every case below would then fail on.
+            -- fill every bar purple, which is what every case below would then fail on.
             local WARDENS = 2574
 
             ---@param best table?
             ---@param asked table? Collects, once each, what the panel asked the store about.
-            ---A row is asked more than once — the "best" line and the hover put the same
+            ---A row is asked more than once — the colour of the bar and the hover put the same
             ---question twice — and how often is the panel's own business rather than a fact
             ---worth pinning down; *what* it asks with is the whole point.
             ---@return function
@@ -972,7 +1169,13 @@ describe("ns.newResultsWindow", function()
                 assert.same({ WARDENS }, asked)
             end)
 
-            it("says which character has got furthest, and how stale that is", function()
+            -- The colour is the crown. This used to be a third line under the faction reading
+            -- "best Renown 22 · Alt, 3d ago", and it is a bar filled green now: green is one
+            -- character's colour everywhere on this panel, so a green bar is the account saying
+            -- somebody who is not on screen has got further with these people. Who, and by how
+            -- much, and how long ago they were last looked at, is the tooltip's answer — the
+            -- bar's is the one thing a player wants without asking.
+            it("fills the bar green where an alt is further along", function()
                 local window, frames = newWindow({
                     accountStanding = standingSource({
                         character = "Alt-Ravencrest",
@@ -986,13 +1189,14 @@ describe("ns.newResultsWindow", function()
 
                 expand(frames[1], "Reputation")
 
-                assert.equal("Alt, 3d ago", valueFor(rowsOf(frames[1]), "    best Renown 22"))
+                assert.same(BAR_FILL_COLOR, barsOf(frames[1])[1].color)
             end)
 
-            -- Naming the holder as "you" rather than leaving the line off: an absent line is
-            -- the one answer a player cannot read, because it looks exactly like the panel not
-            -- knowing. No staleness beside it, because that reading is a moment old.
-            it("names this character as the holder when it is the one out in front", function()
+            -- Purple rather than green rather than nothing at all: an absent mark is the one
+            -- answer a player cannot read, because it looks exactly like the panel not knowing.
+            -- A bar is always one colour or the other, which is the whole reason the crown moved
+            -- into it from a line that had to be left off when it had nothing to say.
+            it("fills the bar purple where this character is the one out in front", function()
                 local window, frames = newWindow({
                     accountStanding = standingSource({
                         character = "Main-Ravencrest",
@@ -1006,13 +1210,14 @@ describe("ns.newResultsWindow", function()
 
                 expand(frames[1], "Reputation")
 
-                assert.equal("you", valueFor(rowsOf(frames[1]), "    best Renown 8"))
+                assert.same(BAR_BEST_COLOR, barsOf(frames[1])[1].color)
             end)
 
             -- The store's best was filed at somebody's logout; this segment has been earning
             -- since. A character that overtook the account's best while it was being played
-            -- holds the crown, and the line has to say the standing it is holding it at.
-            it("states the reading taken this session over the one the store had filed", function()
+            -- holds the crown from the moment it did, so the bar turns purple under it rather
+            -- than staying green until the next logout writes the overtake down.
+            it("crowns the reading taken this session over the one the store had filed", function()
                 local window, frames = newWindow({
                     accountStanding = standingSource({
                         character = "Alt-Ravencrest",
@@ -1026,26 +1231,84 @@ describe("ns.newResultsWindow", function()
 
                 expand(frames[1], "Reputation")
 
-                assert.equal("you", valueFor(rowsOf(frames[1]), "    best Renown 8"))
+                assert.same(BAR_BEST_COLOR, barsOf(frames[1])[1].color)
             end)
 
-            it("states this character's own standing for a faction no other has been seen with", function()
+            -- Two characters level with each other are both at the front, and the stored row a
+            -- tie is usually against is this very character's own last logout — so a tie that
+            -- read as "somebody is ahead of you" would turn a bar green for every faction the
+            -- player has not touched since they last logged out.
+            it("crowns a standing level with the account's best", function()
+                local window, frames = newWindow({
+                    accountStanding = standingSource({
+                        character = "Alt-Ravencrest",
+                        standing = "Renown 8",
+                        rank = 8,
+                        system = "renown",
+                        at = NOW - 24 * 60 * 60,
+                    }),
+                })
+                window.update(summary(gained()))
+
+                expand(frames[1], "Reputation")
+
+                assert.same(BAR_BEST_COLOR, barsOf(frames[1])[1].color)
+            end)
+
+            -- A rank read off the reaction ladder runs 1 to 8 where a friendship's runs into
+            -- the thousands, so two standings on two ladders cannot be put in an order at all.
+            -- Green is the honest colour for that: purple is a claim about the whole account,
+            -- and the panel is in no position to make one.
+            it("leaves the bar green where the account's best is on another ladder", function()
+                local window, frames = newWindow({
+                    accountStanding = standingSource({
+                        character = "Alt-Ravencrest",
+                        standing = "Exalted",
+                        rank = 8,
+                        system = "reaction",
+                        at = NOW,
+                    }),
+                })
+                window.update(summary(gained()))
+
+                expand(frames[1], "Reputation")
+
+                assert.same(BAR_FILL_COLOR, barsOf(frames[1])[1].color)
+            end)
+
+            -- A roster of one is still a roster, and the one reading in it is still the
+            -- account's highest: "nobody else has been here" is not the same answer as "nothing
+            -- is known", and the character at the keyboard is at the front of an account it is
+            -- the only member of.
+            it("fills the bar purple for a faction no other character has been seen with", function()
                 local window, frames = newWindow({ accountStanding = standingSource(nil) })
                 window.update(summary(gained()))
 
                 expand(frames[1], "Reputation")
 
-                assert.equal("you", valueFor(rowsOf(frames[1]), "    best Renown 8"))
+                assert.same(BAR_BEST_COLOR, barsOf(frames[1])[1].color)
             end)
 
-            -- The line reports the account's highest known standing, and a faction the client
-            -- would neither name nor place has no standing to be highest. Drawing "best
-            -- standing" over nothing would report knowing something it does not.
-            it("says nothing at all about a faction the client could not place", function()
-                local window, frames = newWindow({ accountStanding = standingSource(nil) })
+            -- The crown used to be a line of its own under every faction, and it is the colour
+            -- of the bar now — so there must be no line left saying it a second time, for a
+            -- faction the account knows nor for one it does not. A block that drew both would
+            -- be back to two lines per faction, which is the whole of what was collapsed.
+            it("draws no line of its own about who is furthest, for any faction", function()
+                local window, frames = newWindow({
+                    accountStanding = standingSource({
+                        character = "Alt-Ravencrest",
+                        standing = "Renown 22",
+                        rank = 22,
+                        system = "renown",
+                        at = NOW - 3 * 24 * 60 * 60,
+                    }),
+                })
                 window.update(summary({
-                    reputationTotal = 250,
-                    reputation = { { faction = "Dream Wardens", amount = 250 } },
+                    reputationTotal = 290,
+                    reputation = {
+                        gained().reputation[1],
+                        { faction = "Timbermaw Hold", amount = 40 },
+                    },
                 }))
 
                 expand(frames[1], "Reputation")
@@ -1055,11 +1318,13 @@ describe("ns.newResultsWindow", function()
                     labels[#labels + 1] = row.label
                 end
                 assert.is_nil((table.concat(labels, "\n")):match("best"))
+                -- The heading and the two factions, over the panel's own two money rows.
+                assert.equal(5, #labels)
             end)
 
-            -- The "best" line above names the account's highest standing and who holds it, in
-            -- one line. The rest of that answer — every character seen with the faction, how
-            -- far each got, how stale each reading is — is one hover away.
+            -- The colour of the bar says whether anybody is ahead. The rest of that answer —
+            -- every character seen with the faction, how far each got, how stale each reading
+            -- is — is one hover away.
             describe("on hover", function()
                 it("opens the account's standings over the faction pointed at", function()
                     local window, frames, recorded = newWindow({
@@ -1159,6 +1424,34 @@ describe("ns.newResultsWindow", function()
 
                     assert.is_false(pointable(frames[1], "Dream Wardens"))
                 end)
+            end)
+
+            -- Three lines became one, and the one is a bar rather than a label and a value —
+            -- which is a change to what a faction is made of, and could quietly have been a
+            -- change to what it answers to. The hit area is a frame over the whole line and is
+            -- laid out by the same helper both shapes of row share, so a faction still takes a
+            -- mouse-over and a click on the same strip of panel. Said on one row in one test,
+            -- because "the row kept both" is the claim, rather than either half of it.
+            it("keeps both the hover and the click on the one row it is now", function()
+                local window, frames, recorded = newWindow({
+                    accountStanding = standingSource({
+                        character = "Alt-Ravencrest",
+                        standing = "Renown 22",
+                        rank = 22,
+                        system = "renown",
+                        at = NOW - 3 * 24 * 60 * 60,
+                    }),
+                })
+                window.update(summary(gained()))
+                expand(frames[1], "Reputation")
+                local row = standingFor(frames[1], "Dream Wardens")
+
+                row.hit:run("OnEnter")
+                row.hit:run("OnClick", "LeftButton")
+
+                assert.equal(1, recorded.tooltip.shown)
+                assert.equal("Dream Wardens", recorded.tooltip.lines[1].text)
+                assert.same({ WARDENS }, recorded.factions)
             end)
         end)
 

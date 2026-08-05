@@ -579,6 +579,130 @@ describe("the account's answer to a hovered row", function()
         end)
     end)
 
+    ---What colour the panel fills a standing's bar with, which is the whole of what the "best"
+    ---line under a faction used to say in words: purple where nobody on the account is known to
+    ---be further along, green where somebody is.
+    ---
+    ---One question rather than `ns.bestStanding`'s two. That one names who is furthest, which
+    ---is a thing a tooltip has room for and a bar does not — and naming somebody means folding
+    ---the live reading into a roster, which means knowing who is playing. This is the same
+    ---comparison made straight against what the store filed, so a segment read back an hour
+    ---later, where nobody is at the keyboard and the panel is handed no character at all, is
+    ---coloured by the same rule as the segment being played. Hence a gain and a rollup and
+    ---nothing else.
+    describe("ns.leadsStanding", function()
+        ---@param overrides table?
+        ---@return table
+        local function gain(overrides)
+            local base = { faction = "Dream Wardens", amount = 250, rank = 8, system = "renown" }
+            for key, value in pairs(overrides or {}) do
+                base[key] = given(value, value)
+            end
+            return base
+        end
+
+        ---@param best table? What the store has as the account's furthest; `false` for a rollup
+        ---that has none, which is what a faction filed with nothing rankable in it looks like.
+        ---@return table?
+        local function rollup(best)
+            if best == nil then
+                return nil
+            end
+            return { faction = "Dream Wardens", best = given(best, best), characters = {} }
+        end
+
+        ---@param options table?
+        ---@return boolean
+        local function leads(options)
+            options = options or {}
+            return ns.leadsStanding({
+                gain = given(options.gain, gain()),
+                rollup = options.rollup,
+            })
+        end
+
+        it("is exported by the addon files", function()
+            assert.is_function(ns.leadsStanding)
+        end)
+
+        -- A roster of one is still a roster: "nobody else has been here" is not the same answer
+        -- as "nothing is known", and the character at the keyboard is at the front of an account
+        -- it is the only known member of.
+        it("puts a gain in front where the store has never heard of the faction", function()
+            assert.is_true(leads({ rollup = nil }))
+        end)
+
+        -- A rollup exists the moment any character files anything at all about the faction, and
+        -- it may still have nobody to crown: every reading in it was a standing the client would
+        -- name and not place. There is nothing to be behind, so the gain is at the front.
+        it("puts a gain in front where the store has a faction but nobody to crown", function()
+            assert.is_true(leads({ rollup = rollup(false) }))
+            assert.is_true(leads({ rollup = rollup({ character = "Alt-Ravencrest", standing = "Honored" }) }))
+        end)
+
+        it("puts a gain in front of an account that has got less far", function()
+            assert.is_true(leads({
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 4, system = "renown" }),
+            }))
+        end)
+
+        -- A tie leads. Two characters level with each other are both at the front, and the
+        -- stored row a tie is usually against is this very character's own last logout — so a
+        -- tie read as "somebody is ahead of you" would put every faction the player has not
+        -- touched since they last logged out behind the account.
+        it("puts a gain level with the account's best in front", function()
+            assert.is_true(leads({
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 8, system = "renown" }),
+            }))
+        end)
+
+        it("leaves a gain behind an account that has got further", function()
+            assert.is_false(leads({
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 22, system = "renown" }),
+            }))
+        end)
+
+        -- False rather than true wherever the answer is not known. A standing the client would
+        -- not place cannot be compared with anything, and purple is a claim about the whole
+        -- account — so the honest colour for "we cannot say" is the ordinary one.
+        it("leaves a gain nothing could place behind", function()
+            assert.is_false(leads({ gain = gain({ rank = false, system = false }) }))
+            assert.is_false(leads({
+                gain = gain({ rank = false }),
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 4, system = "renown" }),
+            }))
+        end)
+
+        -- A rank read off the reaction ladder runs 1 to 8 where a friendship's runs into the
+        -- thousands, so two standings on two ladders cannot be put in an order at all — in
+        -- either direction, however small the number the other one is holding.
+        it("compares nothing against a best read off another ladder", function()
+            assert.is_false(leads({
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 22, system = "reaction" }),
+            }))
+            assert.is_false(leads({
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 1, system = "reaction" }),
+            }))
+        end)
+
+        -- A gain filed before `system` travelled with a rank, against a store filed the same
+        -- way: two nils are the same ladder, which is what keeps an old saved variables file
+        -- comparing against itself rather than every faction in it turning green.
+        it("compares two readings that both name no ladder at all", function()
+            assert.is_true(leads({
+                gain = gain({ system = false }),
+                rollup = rollup({ character = "Alt-Ravencrest", rank = 4 }),
+            }))
+        end)
+
+        -- Asked with nothing at all, which is what a caller that has neither half of the
+        -- question looks like. There is no gain to put in front, so there is nothing to claim.
+        it("claims nothing when it is handed nothing", function()
+            assert.is_false(ns.leadsStanding())
+            assert.is_false(ns.leadsStanding({}))
+        end)
+    end)
+
     describe("ns.currencyTooltip", function()
         ---@param options table?
         ---@return table?

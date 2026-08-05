@@ -5012,13 +5012,13 @@ describe("addon integration", function()
         end)
 
         -- Every part of this answer is already covered on its own and already green: the
-        -- store knows which character stands furthest, `ns.bestStanding` crowns one of them,
-        -- and `ResultsWindow` draws the line when it is handed the account. What nothing
-        -- below this level can see is that the panel the segment table opens is built without
-        -- the account at all, so the line is unreachable there — that is a fact about how
-        -- Main.lua wires the two together, and only booting the addon and opening a filed
-        -- segment the way a player does can show it.
-        it("shows the account's highest standing when a segment is opened from the table", function()
+        -- store knows which character stands furthest, `ns.leadsStanding` says whether this one
+        -- is among them, and `ResultsWindow` colours the bar by it when it is handed the
+        -- account. What nothing below this level can see is that the panel the segment table
+        -- opens is built without the account at all, so the comparison is unreachable there —
+        -- that is a fact about how Main.lua wires the two together, and only booting the addon
+        -- and opening a filed segment the way a player does can show it.
+        it("colours a standing by the whole account when a segment is opened from the table", function()
             local NOW = 1700000000
             local THREE_DAYS = 3 * 24 * 60 * 60
             local db = {
@@ -5104,8 +5104,28 @@ describe("addon integration", function()
 
             clickPanelRow(panel, "Reputation")
 
-            -- Labels and values are told apart by justification and paired in drawn order,
-            -- which is how every other reading of this panel reconstructs a line.
+            -- The faction's row is the bar, and what the bar is filled with is the whole of
+            -- what says whether anybody on the account has got further with these people.
+            -- The alt was filed at Renown 22 and this segment reached Renown 8, so green — one
+            -- character's colour, meaning somebody who is not on screen is ahead. A panel built
+            -- without the account would have nothing to compare against and would fill it
+            -- purple, so the colour is the readable end of the wiring this test is about.
+            --
+            -- The track is on BACKGROUND and the filled part of it on ARTWORK, which is what
+            -- picks the fill out of a panel whose own chrome is all drawn on BORDER.
+            local filled
+            local _, textures = fake.regionsOf(panel)
+            for _, texture in ipairs(textures) do
+                if texture.layer == "ARTWORK" and texture.shown then
+                    filled = texture
+                end
+            end
+            assert.is_table(filled)
+            assert.same({ 0.24, 0.55, 0.29, 0.95 }, filled.color)
+
+            -- And it is the row this bar belongs to, rather than any other bar the panel might
+            -- have drawn: the faction names itself on the left of it and the segment's own gain
+            -- is on the right.
             local labels, values = {}, {}
             for _, fontString in ipairs((fake.regionsOf(panel))) do
                 local row = fontString.shown and fontString.template == "GameFontHighlightSmall"
@@ -5115,14 +5135,14 @@ describe("addon integration", function()
                     values[#values + 1] = fontString.text
                 end
             end
-            local best
+            local gained
             for index, label in ipairs(labels) do
-                if label == "    best Renown 22" then
-                    best = values[index]
+                if label == "Dream Wardens" then
+                    gained = values[index]
                 end
             end
 
-            assert.equal("Alt, 3d ago", best)
+            assert.equal("+250", gained)
         end)
 
         it("names every subcommand there is in the usage text", function()
