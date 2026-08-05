@@ -1641,6 +1641,16 @@ if CreateFrame then
             return list
         end
 
+        ---What turns the localised name a reputation chat line carries into the faction's own
+        ---id. Built once and shared, because it is an index rather than a lookup: the first name
+        ---it cannot answer is what provokes it to walk, and a second copy would walk again.
+        local factionIndex = ns.newFactionIndex({
+            reputation = C_Reputation,
+            after = function(seconds, callback)
+                C_Timer.After(seconds, callback)
+            end,
+        })
+
         ---The four namespaces a standing has to be assembled out of, in the bag the pure
         ---readers take them in. A fresh table each call, because the sweep adds the
         ---currency pane to its own copy and nothing else should inherit it.
@@ -1653,6 +1663,11 @@ if CreateFrame then
                 reactionLabel = function(reaction)
                     return _G["FACTION_STANDING_LABEL" .. reaction]
                 end,
+                -- Only `ns.readFactionState` reaches for this — the walk next door and the
+                -- census are both handed a faction already, and it is a gain announced by name
+                -- that has to find one. It travels in the same bag so there is one place the
+                -- client's reputation tables are gathered rather than two.
+                resolveFaction = factionIndex.resolve,
             }
         end
 

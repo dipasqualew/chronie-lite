@@ -147,17 +147,42 @@ local callable = ns.callable
 
 ---Finds one faction's data table by the name the chat message called it.
 ---
----By name where the client offers it. Where it does not, the reputation list is walked
----instead — the same tables, reached the long way round. That walk only sees the rows the
----pane is currently showing, so a faction under a collapsed header is invisible to it;
----the caller then keeps whatever standing it had rather than showing none.
----@param reputation table? The client's `C_Reputation`.
+---Three roads, tried cheapest first, because a chat line carries a localised name and
+---everything downstream is filed under an id.
+---
+---**By name**, where the client offers it. One call, and the whole question — but
+---`GetFactionDataByName` is not on every build, and it was already missing in issue #44.
+---
+---**By id**, where something has been able to turn the name into one. That is
+---`ns.newFactionIndex`, handed in as `resolveFaction` and answering nil until it has walked;
+---`GetFactionDataByID` then answers for the faction whatever the pane is doing with it. This is
+---the road that reaches a legacy faction and one folded under a collapsed header, which is
+---most of the game's factions and none of what the walk below can see.
+---
+---**By walking the pane**, last and unconditionally: it costs a call per row on show, it
+---answers immediately where the two roads above have not yet, and on the first gain of a
+---session it is the only one of the three that can. A faction none of them reaches leaves the
+---caller keeping whatever standing it had rather than showing none.
+---@param clients table? As `ns.readFactionStanding` takes them, plus `resolveFaction`.
 ---@param faction string
 ---@return table? faction data, in `GetFactionDataByName`'s shape
-local function findFaction(reputation, faction)
+local function findFaction(clients, faction)
+    local reputation = clients.reputation
     local byName = callable(reputation, "GetFactionDataByName")
-    if byName then
-        return byName(faction)
+    local named = byName and byName(faction)
+    if named then
+        return named
+    end
+
+    -- Asked even where the call above exists and answered nothing: a name the client will not
+    -- place is exactly what the index was walked for, and a road not taken because a cheaper
+    -- one was available is a road that never repairs anything.
+    local resolve = clients.resolveFaction
+    local byID = callable(reputation, "GetFactionDataByID")
+    local id = type(resolve) == "function" and resolve(faction) or nil
+    local identified = id and byID and byID(id)
+    if identified then
+        return identified
     end
 
     local count = callable(reputation, "GetNumFactions")
@@ -285,7 +310,9 @@ function ns.readFactionStandingByID(clients, factionID)
 end
 
 ---Where the character stands with the faction a chat message just named.
----@param clients table? As `ns.readFactionStanding` takes them.
+---@param clients table? As `ns.readFactionStanding` takes them, plus `resolveFaction`: what
+---turns the localised name a chat line carries into the id everything else is filed under. See
+---`findFaction` for why one call is not enough, and `ns.newFactionIndex` for what supplies it.
 ---@param faction string? The faction's localised name, as the chat message named it.
 ---@return FactionStanding?
 function ns.readFactionState(clients, faction)
@@ -293,5 +320,5 @@ function ns.readFactionState(clients, faction)
         return nil
     end
     clients = clients or {}
-    return ns.readFactionStanding(clients, findFaction(clients.reputation, faction))
+    return ns.readFactionStanding(clients, findFaction(clients, faction))
 end

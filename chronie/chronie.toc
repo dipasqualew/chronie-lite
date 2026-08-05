@@ -47,6 +47,7 @@ src/EntryToast.lua
 src/EquipsetLedger.lua
 src/EventDispatcher.lua
 src/ExpansionIndex.lua
+src/FactionIndex.lua
 src/FactionStanding.lua
 src/HoldingsStore.lua
 src/HoldingsSweep.lua
