@@ -72,6 +72,9 @@ local addonName, ns = ...
 ---@field openMountJournal fun(mountID: integer) The collections journal, on the mount itself.
 ---@field openPetJournal fun(speciesID: integer?, guid: string?) The same journal on its pets tab,
 ---on the very pet the guid names where there is one and on the species otherwise.
+---@field openQuest fun(questID: integer) What a quest was, as the client itself puts it up.
+---@field openReputation fun(factionID: integer) The character pane's reputation tab, standing on
+---one faction.
 ---@field className fun(classID: integer): string? Localised name of a class by its id, which is
 ---how a transmog set's class mask becomes something a tooltip can print.
 ---@field transmogArmorType fun(sourceID: integer): string? Localised armour type of the item
@@ -458,6 +461,8 @@ function ns.main(env)
         openAchievement = env.openAchievement,
         openMount = env.openMountJournal,
         openPet = env.openPetJournal,
+        openQuest = env.openQuest,
+        openReputation = env.openReputation,
         previewTransmog = transmogPreview.show,
         openTransmogCollection = env.openTransmogCollection,
         previewTransmogSet = transmogPreview.showSet,
@@ -946,6 +951,8 @@ function ns.main(env)
         openAchievement = env.openAchievement,
         openMount = env.openMountJournal,
         openPet = env.openPetJournal,
+        openQuest = env.openQuest,
+        openReputation = env.openReputation,
         previewTransmog = transmogPreview.show,
         openTransmogCollection = env.openTransmogCollection,
         previewTransmogSet = transmogPreview.showSet,
@@ -2145,6 +2152,52 @@ if CreateFrame then
                     PetJournal_SelectPet(nil, guid)
                 elseif speciesID and PetJournal_SelectSpecies then
                     PetJournal_SelectSpecies(nil, speciesID)
+                end
+            end,
+            ---What a quest was, opened the way a quest link in chat is opened.
+            ---
+            ---By reference rather than through the quest log, and that is forced: every quest
+            ---the panel draws has been handed in, so `C_QuestLog` answers nothing about it and
+            ---the map has no pin left to fly to. `SetItemRef` is the one door that takes a bare
+            ---id — it is what the client runs when somebody clicks a quest link somebody else
+            ---linked, and it puts up the same panel.
+            ---
+            ---The level is asked for because the reference carries one, and `-1` where the
+            ---client will not say: that is what its own links carry for a quest whose level
+            ---scales, and the handler reads the id either way.
+            openQuest = function(questID)
+                if not questID or not SetItemRef then
+                    return
+                end
+                local level = C_QuestLog.GetQuestDifficultyLevel
+                    and C_QuestLog.GetQuestDifficultyLevel(questID)
+                SetItemRef("quest:" .. questID .. ":" .. (level or -1),
+                    GetQuestLink and GetQuestLink(questID) or "", "LeftButton")
+            end,
+            ---The reputation pane, standing on one faction.
+            ---
+            ---`ToggleCharacter` is the door every one of the client's own buttons opens this
+            ---pane by, and asking for the tab by name is what switches to it when the character
+            ---frame is already up on another one. Guarded on the pane not already being open,
+            ---because a toggle asked for what it is already showing is a toggle that shuts it —
+            ---and a click that closed the thing it was meant to open would read as the click
+            ---having done nothing.
+            ---
+            ---The selection is asked for first and separately, and it is allowed to fail: it is
+            ---what puts the pane's own cursor on the faction, and a build without the call — or
+            ---a faction the pane is not currently drawing, which is every legacy reputation
+            ---until the player asks to see them — leaves the pane opening wherever it last
+            ---stood. That is still most of what the click was for, so it is nil-checked rather
+            ---than depended on, exactly as the two collections selections above are.
+            openReputation = function(factionID)
+                if factionID and C_Reputation and C_Reputation.SetSelectedFaction then
+                    C_Reputation.SetSelectedFaction(factionID)
+                end
+                if ReputationFrame and ReputationFrame:IsShown() then
+                    return
+                end
+                if ToggleCharacter then
+                    ToggleCharacter("ReputationFrame")
                 end
             end,
             className = function(classID)

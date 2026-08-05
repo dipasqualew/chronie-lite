@@ -25,6 +25,75 @@ describe("addon integration", function()
         return app, recorded
     end
 
+    ---Every row of a results panel's body: the label, the value beside it, and the hit area
+    ---covering both.
+    ---
+    ---A row is three things rather than two. The pointer is answered by a Button over the
+    ---whole row rather than by the row's own text, because a font string is a region and the
+    ---client hands a region a click but never a mouse-over — so anything reached by pointing
+    ---has to be reached through the frame. The rows are drawn on the content inside the
+    ---viewport that scrolls them, which the panel names after itself, and pooled in creation
+    ---order: the hit area is made first and then the two font strings, so the Nth child frame
+    ---of that content owns the Nth pair. A bar's caption lands in the same list and is the one
+    ---font string the panel centres, so it comes out first.
+    ---@param panel table a results window's own frame
+    ---@return table[] `{ { label = table, value = table, hit = table }, ... }`
+    local function panelRows(panel)
+        local body
+        for _, child in ipairs(panel.children or {}) do
+            if child.frameName == (panel.frameName or "") .. "Body" then
+                body = child.children[1]
+            end
+        end
+        assert(body, "the panel built no viewport")
+        local halves = {}
+        for _, fontString in ipairs(body.fontStrings) do
+            if fontString.justify ~= "CENTER" then
+                halves[#halves + 1] = fontString
+            end
+        end
+        local rows = {}
+        for index = 1, math.floor(#halves / 2) do
+            rows[index] = {
+                label = halves[index * 2 - 1],
+                value = halves[index * 2],
+                hit = body.children[index],
+            }
+        end
+        return rows
+    end
+
+    ---The hit area of the first row on screen saying `name` — the frame the client would
+    ---deliver a click or a mouse-over to, which is the only part of a row either reaches.
+    ---@param panel table
+    ---@param name string
+    ---@return table
+    local function panelHit(panel, name)
+        for _, row in ipairs(panelRows(panel)) do
+            if row.label.shown and row.label.justify == "LEFT"
+                and (row.label.text or ""):find(name, 1, true) then
+                return assert(row.hit, "the row saying " .. name .. " has no hit area")
+            end
+        end
+        error("no row saying " .. name .. " on the panel")
+    end
+
+    ---Clicks the first row saying `name`. Looked up afresh every time, because a click
+    ---repaints the panel and the rows are pooled.
+    ---@param panel table
+    ---@param name string
+    ---@param button string? Left unless a case is about the other one.
+    local function clickPanelRow(panel, name, button)
+        panelHit(panel, name):run("OnClick", button or "LeftButton")
+    end
+
+    ---Rests the pointer on the first row saying `name`.
+    ---@param panel table
+    ---@param name string
+    local function pointAtPanelRow(panel, name)
+        panelHit(panel, name):run("OnEnter")
+    end
+
     describe("loading", function()
         it("populates the namespace with every constructor", function()
             local ns = loader.load()
@@ -3296,19 +3365,8 @@ describe("addon integration", function()
             )
 
             local frame = panelFrame(recorded)
-            for _, fontString in ipairs((fake.regionsOf(frame))) do
-                if fontString.shown and (fontString.text or ""):find("Reputation", 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    break
-                end
-            end
-            for _, fontString in ipairs((fake.regionsOf(frame))) do
-                if fontString.shown and fontString.justify == "LEFT"
-                    and (fontString.text or ""):find("Argent Dawn", 1, true) then
-                    fontString:run("OnEnter")
-                    break
-                end
-            end
+            clickPanelRow(frame, "Reputation")
+            pointAtPanelRow(frame, "Argent Dawn")
 
             local drawn = {}
             for _, line in ipairs(recorded.tooltip.lines) do
@@ -3321,6 +3379,73 @@ describe("addon integration", function()
                 "Jaina · 2d ago → Exalted  1 / 1",
                 "Thrall (you) → Honored  3,000 / 12,000",
             }, drawn)
+        end)
+
+        -- The row reports a change to a standing; the pane is where the standing itself lives.
+        -- Only the whole addon can say the click gets there: the panel is perfectly happy with
+        -- an opener it was never handed, and a seam left unwired is silently a row that does
+        -- nothing when a player clicks it. The id matters as much as the click — the pane is
+        -- found by what the client answered with, not by the name the chat line announced.
+        it("opens the character pane on a faction whose row is clicked", function()
+            local _, recorded = boot({
+                playerName = "Thrall",
+                realmName = "Ragnaros",
+                instanceType = "party",
+                factions = {
+                    ["Argent Dawn"] = {
+                        id = 529,
+                        name = "Argent Dawn",
+                        standing = "Honored",
+                        current = 3000,
+                        max = 12000,
+                        rank = 6,
+                        system = "reaction",
+                    },
+                },
+            })
+            recorded.frame:fire("PLAYER_ENTERING_WORLD")
+            recorded.frame:fire(
+                "CHAT_MSG_COMBAT_FACTION_CHANGE",
+                "Your Argent Dawn reputation has increased by 40."
+            )
+
+            local frame = panelFrame(recorded)
+            -- The heading first: the faction's own row is not drawn until the block it sits
+            -- in has been opened.
+            clickPanelRow(frame, "Reputation")
+            clickPanelRow(frame, "Argent Dawn")
+
+            assert.same({ 529 }, recorded.openedReputations())
+        end)
+
+        -- Every quest on the panel has been handed in, so there is no log entry to open and no
+        -- pin to fly to: the client's own quest-link panel is the whole of what a click can
+        -- still answer with, and whether the addon reached it is a question about the wiring
+        -- between Main and the panel rather than about either end.
+        it("puts up a quest whose row is clicked", function()
+            local _, recorded = boot({
+                playerName = "Thrall",
+                realmName = "Ragnaros",
+                instanceType = "party",
+                -- Taken as a baseline before it is handed in, which is where the name on the
+                -- row comes from: the client answers nothing about a quest once it is done.
+                activeQuests = { 7848 },
+                questStates = {
+                    [7848] = {
+                        name = "Deep Ocean, Vast Sea",
+                        characterCompleted = false,
+                        accountCompleted = false,
+                    },
+                },
+            })
+            recorded.frame:fire("PLAYER_ENTERING_WORLD")
+            recorded.frame:fire("QUEST_TURNED_IN", 7848)
+
+            local frame = panelFrame(recorded)
+            clickPanelRow(frame, "Quests")
+            clickPanelRow(frame, "Deep Ocean, Vast Sea")
+
+            assert.same({ 7848 }, recorded.openedQuests())
         end)
 
         -- Clicking a collected appearance is three things wired together — the panel that
@@ -3344,18 +3469,8 @@ describe("addon integration", function()
             local frame = panelFrame(recorded)
             -- The heading first, because the item's own row is not drawn until the block it
             -- sits in has been opened, and then the row the appearance was filed under.
-            for _, fontString in ipairs((fake.regionsOf(frame))) do
-                if fontString.shown and (fontString.text or ""):find("Transmog", 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    break
-                end
-            end
-            for _, fontString in ipairs((fake.regionsOf(frame))) do
-                if fontString.shown and (fontString.text or ""):find("Item 19019", 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    break
-                end
-            end
+            clickPanelRow(frame, "Transmog")
+            clickPanelRow(frame, "Item 19019")
 
             assert.same({
                 { call = "dressUp", link = "item:19019" },
@@ -3397,28 +3512,12 @@ describe("addon integration", function()
             recorded.frame:fire("TRANSMOG_COLLECTION_SOURCE_ADDED", 11)
 
             local frame = panelFrame(recorded)
-            ---Clicks the first row on screen saying `needle`. Looked up afresh each time,
-            ---because a click repaints the panel and the rows are pooled.
-            ---@param needle string
-            ---@param button string
-            local function click(needle, button)
-                -- Through `regionsOf`, because the body is drawn inside the viewport that
-                -- scrolls it rather than on the panel frame itself.
-                for _, fontString in ipairs((fake.regionsOf(frame))) do
-                    if fontString.shown and (fontString.text or ""):find(needle, 1, true) then
-                        fontString:run("OnMouseUp", button)
-                        return
-                    end
-                end
-                error("no row saying " .. needle .. " to click")
-            end
-
             -- The heading first: the item's own row is not drawn until the block it sits in
             -- has been opened.
-            click("Transmog", "LeftButton")
+            clickPanelRow(frame, "Transmog")
             recorded.setShiftDown(true)
-            click("Item 19019", "LeftButton")
-            click("Item 19019", "RightButton")
+            clickPanelRow(frame, "Item 19019", "LeftButton")
+            clickPanelRow(frame, "Item 19019", "RightButton")
 
             -- Stripped once, and then every piece of the set in the order the client listed
             -- them — as source ids, which is what a set's pieces are.
@@ -3470,12 +3569,7 @@ describe("addon integration", function()
             local frame = panelFrame(recorded)
             -- The heading, because the item's own row is not drawn until the block it sits in
             -- has been opened.
-            for _, fontString in ipairs((fake.regionsOf(frame))) do
-                if fontString.shown and (fontString.text or ""):find("Transmog", 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    break
-                end
-            end
+            clickPanelRow(frame, "Transmog")
 
             -- One of the three, counted off the set the drop reached through rather than off
             -- the drop, which is in no set at all.
@@ -5008,12 +5102,7 @@ describe("addon integration", function()
             end
             assert.is_table(panel)
 
-            for _, fontString in ipairs((fake.regionsOf(panel))) do
-                if fontString.shown and (fontString.text or ""):find("Reputation", 1, true) then
-                    fontString:run("OnMouseUp", "LeftButton")
-                    break
-                end
-            end
+            clickPanelRow(panel, "Reputation")
 
             -- Labels and values are told apart by justification and paired in drawn order,
             -- which is how every other reading of this panel reconstructs a line.

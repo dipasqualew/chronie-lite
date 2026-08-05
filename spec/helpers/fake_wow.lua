@@ -225,6 +225,17 @@ function fake.newTexture(layer)
         return self.shown
     end
 
+    ---Faded rather than hidden, which is a distinction a mouse-over wash needs: a highlight
+    ---the client owns is shown and hidden by the button under the pointer, so the only way to
+    ---say "this row does not answer" without fighting it is to leave it at no alpha.
+    function texture:SetAlpha(alpha)
+        self.alpha = alpha
+    end
+
+    function texture:GetAlpha()
+        return self.alpha == nil and 1 or self.alpha
+    end
+
     return texture
 end
 
@@ -433,9 +444,41 @@ function fake.newFrame(options)
         return self.verticalScroll or 0
     end
 
+    -- Recorded rather than ignored: a row's hit area is a frame now, and "does the pointer
+    -- find anything here" is the whole difference between a tooltip that opens and one that is
+    -- wired to a script the client never runs — and between a row the panel can be dragged by
+    -- and a dead spot on it.
+    function frame:EnableMouse(enabled)
+        self.mouseEnabled = enabled and true or false
+    end
+
     -- The picture a button wears, which is what says whether the size is pinned.
     function frame:SetNormalTexture(picture)
         self.normalTexture = picture
+    end
+
+    ---The wash the client draws under the pointer. Kept off `self.textures` deliberately: that
+    ---list is what `fake.regionsOf` walks to answer "what is drawn on this panel", and a
+    ---highlight is chrome the client paints rather than anything the addon laid out.
+    function frame:SetHighlightTexture(picture, blend)
+        self.highlight = self.highlight or fake.newTexture("HIGHLIGHT")
+        self.highlight.texture = picture
+        self.highlight.blend = blend
+    end
+
+    function frame:GetHighlightTexture()
+        return self.highlight
+    end
+
+    -- Where a frame sits in the stack. Recorded rather than ignored because two frames of the
+    -- panel share a corner — the resize grip and the last row's hit area — and which of them
+    -- the pointer finds is decided by this and by nothing else.
+    function frame:SetFrameLevel(level)
+        self.frameLevel = level
+    end
+
+    function frame:GetFrameLevel()
+        return self.frameLevel or 0
     end
 
     function frame:SetResizable(enabled)
@@ -463,12 +506,10 @@ function fake.newFrame(options)
         "SetBackdropColor",
         "SetBackdropBorderColor",
         "SetMovable",
-        "EnableMouse",
         "RegisterForDrag",
         "SetClampedToScreen",
         "SetScrollChild",
         "EnableMouseWheel",
-        "SetHighlightTexture",
         "RegisterForClicks",
         "SetJustifyH",
         "SetCursorPosition",
@@ -1057,6 +1098,11 @@ function fake.newEnv(options)
     -- Every set the addon asked the collections journal to open, which is the only trace a
     -- shifted right click leaves: the real journal is a frame this fake has no stand-in for.
     local openedTransmogSets = {}
+    -- The two panes a row of the results window can send the player to, recorded for the same
+    -- reason: the client's quest-link panel and its reputation tab are frames nothing here
+    -- stands in for, so the id the addon asked each of them for is the whole of the trace.
+    local openedQuests = {}
+    local openedReputations = {}
     -- The character's equipment sets and what it is wearing, both mutable so a test can
     -- change them between two syncs and watch the ledger notice.
     local equipmentSets = options.equipmentSets or {}
@@ -1612,6 +1658,12 @@ function fake.newEnv(options)
             }
         end,
         openAchievement = function() end,
+        openQuest = function(questID)
+            openedQuests[#openedQuests + 1] = questID
+        end,
+        openReputation = function(factionID)
+            openedReputations[#openedReputations + 1] = factionID
+        end,
         dressUpItem = function(link)
             dressingRoom[#dressingRoom + 1] = { call = "dressUp", link = link }
             return dressableItems
@@ -1846,6 +1898,16 @@ function fake.newEnv(options)
         ---@return integer[]
         openedTransmogSets = function()
             return openedTransmogSets
+        end,
+        ---Every quest the addon asked the client to put up, in the order it asked.
+        ---@return integer[]
+        openedQuests = function()
+            return openedQuests
+        end,
+        ---Every faction the addon asked the character pane to stand on, in the order it asked.
+        ---@return integer[]
+        openedReputations = function()
+            return openedReputations
         end,
         ---Hold shift down, or let it up. What tells the four actions on a transmog row apart,
         ---and the one thing about a click a test cannot express by clicking.

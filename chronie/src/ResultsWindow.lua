@@ -29,6 +29,11 @@ local _, ns = ...
 ---a click on the row that says it was collected.
 ---@field openPet fun(speciesID: integer, guid: string?)? The same journal on its pets tab: the
 ---very pet caught where the client filed a guid for it, the species otherwise.
+---@field openQuest fun(questID: integer)? What the quest was, for a click on the row that says
+---it was completed. Every quest here has been handed in, so this is the client's own account of
+---one rather than anything the quest log still holds.
+---@field openReputation fun(factionID: integer)? The character pane's reputation tab, standing
+---on the faction clicked.
 ---@field previewTransmog fun(itemID: integer)?
 ---@field openTransmogCollection fun(sourceID: integer)?
 ---@field previewTransmogSet fun(itemID: integer, sources: integer[])? The whole set on the body
@@ -235,24 +240,31 @@ local function newViewport(createFrame, parent, name, top)
     return viewport
 end
 
----Turns a row's mouse input on or off — both halves of it, because a click and a hover are
----two flags rather than one.
+---Turns a row's hit area on or off: whether the pointer finds anything there at all.
 ---
----Every row on this panel is a font string rather than a frame, and the client keeps a
----region's click flag and its motion flag apart: `EnableMouse` is what a click needs, and
----OnEnter and OnLeave are motion, which is the second flag. A row that had only the first was
----clickable and could not be pointed at — which is what a faction whose account-wide standings
----never opened on hover looks like from the keyboard.
+---The pointer is answered by a frame covering the row rather than by the row's own text.
+---Every row here is drawn as two font strings, and a font string is a region: the client
+---hands a region a click readily enough — which is why the headings have always opened and
+---closed — but never a mouse-over, so a tooltip hung on one is wired to a script that is
+---never run. That is what a faction whose account-wide standings would not open on hover was:
+---not a missing tooltip, a missing frame. `SetMouseMotionEnabled` was asked of the region
+---first and is not what it needed; a Button over the row is, and it is what `LockoutWindow`
+---has always put under the one hover in this addon that works.
 ---
----`SetMouseMotionEnabled` is asked for rather than assumed, the same rule `ns.callable` keeps
----for every client call this addon makes: a build without it is left with exactly the behaviour
----it already had rather than with a Lua error out of a repaint.
----@param region table
+---Turning it off again is not tidiness. The panel is dragged by the frame these rows sit on,
+---and a hit area left enabled over a row with nothing to say is a strip the player cannot
+---pick the panel up by.
+---@param hit table The row's hit area.
 ---@param enabled boolean
-local function takesMouse(region, enabled)
-    region:EnableMouse(enabled)
-    if region.SetMouseMotionEnabled then
-        region:SetMouseMotionEnabled(enabled)
+local function answersPointer(hit, enabled)
+    hit:EnableMouse(enabled)
+    -- The client's own mouse-over wash, and only where the row answers to it: a highlight
+    -- following the pointer across rows that do nothing is the panel promising something it
+    -- will not deliver. Set once at creation and faded rather than swapped, so a repaint
+    -- never hands the texture back and forth.
+    local highlight = hit.GetHighlightTexture and hit:GetHighlightTexture()
+    if highlight then
+        highlight:SetAlpha(enabled and 1 or 0)
     end
 end
 
@@ -519,6 +531,15 @@ function ns.newResultsWindow(deps)
             frame:StopMovingOrSizing()
             saveSize()
         end)
+        -- Lifted over the body's rows, which is a thing the corner it sits in now needs
+        -- saying. The rows used to be regions of a frame this one was created after, and
+        -- creation order settled it; they are frames of their own now, nested a level deeper
+        -- inside the viewport, and a nested frame stacks above its ancestors' siblings whenever
+        -- it was made. Left alone, the last row on screen would swallow the six pixels of the
+        -- grip that overhang it — the one control that cannot be reached any other way.
+        if grip.SetFrameLevel and body.GetFrameLevel then
+            grip:SetFrameLevel((body:GetFrameLevel() or 0) + 10)
+        end
 
         applyWidth()
         frame:SetResizable(true)
@@ -543,24 +564,39 @@ function ns.newResultsWindow(deps)
         frame:Hide()
     end
 
-    ---A label/value pair sharing one line. Word wrapping is disabled because every row
-    ---has a fixed height; a long localized name is clipped inside its column instead of
-    ---wrapping over the row below.
+    ---A label/value pair sharing one line, and the hit area over both. Word wrapping is
+    ---disabled because every row has a fixed height; a long localized name is clipped inside
+    ---its column instead of wrapping over the row below.
+    ---
+    ---The hit area is one frame across the whole row rather than one per column, because a
+    ---row means one thing however far along it the pointer happens to be: pointing at the
+    ---faction and pointing at the number it gained are the same question. It is built before
+    ---the two font strings so it cannot draw over them, and it draws nothing of its own but
+    ---the mouse-over wash `answersPointer` fades in.
+    ---
+    ---`AnyUp` rather than the default left button: the transmog rows read the button out of
+    ---the click, and a Button that was never registered for the right one would answer half
+    ---of what the row offers.
     ---@param index integer
-    ---@return table label, table value
+    ---@return table label, table value, table hit
     local function rowAt(index)
         local row = rows[index]
         if not row then
+            local hit = createFrame("Button", nil, body)
+            hit:SetHeight(LINE)
+            hit:RegisterForClicks("AnyUp")
+            hit:SetHighlightTexture(BUTTON_HIGHLIGHT, "ADD")
+            hit:Hide()
             local label = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             local value = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             label:SetJustifyH("LEFT")
             value:SetJustifyH("RIGHT")
             label:SetWordWrap(false)
             value:SetWordWrap(false)
-            row = { label = label, value = value }
+            row = { label = label, value = value, hit = hit }
             rows[index] = row
         end
-        return row.label, row.value
+        return row.label, row.value, row.hit
     end
 
     ---A progress bar: an unfilled track, the filled part of it, and a caption centred over
@@ -791,7 +827,7 @@ function ns.newResultsWindow(deps)
         ---@param labelColor number[]? Brighter for a category heading than for what is under it.
         local function line(text, valueText, color, action, requestedValueWidth, labelColor)
             used = used + 1
-            local label, value = rowAt(used)
+            local label, value, hit = rowAt(used)
             local valueWidth = valueText ~= "" and (requestedValueWidth or VALUE_WIDTH) or 0
             local gap = valueWidth > 0 and COLUMN_GAP or 0
             label:SetWidth(width - PADDING * 2 - valueWidth - gap)
@@ -805,24 +841,23 @@ function ns.newResultsWindow(deps)
             value:SetText(valueText)
             value:SetTextColor(color[1], color[2], color[3])
             value:Show()
-            takesMouse(label, action ~= nil)
-            takesMouse(value, action ~= nil)
-            label:SetScript("OnMouseUp", action and function(_, button) action(button) end or nil)
-            value:SetScript("OnMouseUp", action and function(_, button) action(button) end or nil)
+            hit:SetPoint("TOPLEFT", PADDING, y)
+            hit:SetWidth(width - PADDING * 2)
+            hit:Show()
+            hit:SetScript("OnClick", action and function(_, button) action(button) end or nil)
             -- Cleared on every line rather than only where one was set. Rows are pooled, so a
-            -- font string that was a faction a moment ago would otherwise still open that
+            -- hit area that covered a faction a moment ago would otherwise still open that
             -- faction's tooltip now that the same row is drawing a mount.
-            label:SetScript("OnEnter", nil)
-            label:SetScript("OnLeave", nil)
-            value:SetScript("OnEnter", nil)
-            value:SetScript("OnLeave", nil)
+            hit:SetScript("OnEnter", nil)
+            hit:SetScript("OnLeave", nil)
+            answersPointer(hit, action ~= nil)
             y = y - LINE
         end
 
         ---Hangs a tooltip on the line just drawn.
         ---
-        ---Separate from `line` rather than another argument to it, because only two of the
-        ---panel's dozen kinds of row have one and both want the row already placed: the
+        ---Separate from `line` rather than another argument to it, because only a few of the
+        ---panel's dozen kinds of row have one and all of them want the row already placed: the
         ---content is built here, at render, so a row with nothing to say never becomes a
         ---mouse-enabled dead spot on a frame the player drags by.
         ---@param content AccountTooltipContent?
@@ -830,14 +865,15 @@ function ns.newResultsWindow(deps)
             if not deps.tooltip or not content then
                 return
             end
-            local label, value = rowAt(used)
-            for _, region in ipairs({ label, value }) do
-                takesMouse(region, true)
-                region:SetScript("OnEnter", function()
-                    showTooltip(content)
-                end)
-                region:SetScript("OnLeave", hideTooltip)
-            end
+            local _, _, hit = rowAt(used)
+            -- Answering the pointer is turned on here rather than left to `line`, which only
+            -- knows whether the row has somewhere for a click to go: a faction that opens the
+            -- account's standings and nothing else is still a row worth pointing at.
+            answersPointer(hit, true)
+            hit:SetScript("OnEnter", function()
+                showTooltip(content)
+            end)
+            hit:SetScript("OnLeave", hideTooltip)
         end
 
         ---A progress bar occupying a line of its own, under the row it belongs to.
@@ -1148,6 +1184,7 @@ function ns.newResultsWindow(deps)
             heading("Quests", "quests", questValue, SUMMARY_VALUE_WIDTH)
             if expanded.quests then
                 for _, event in ipairs(quests) do
+                    local current = event
                     -- The colour alone, the way the transmog and achievement blocks say it.
                     -- The word that used to sit beside it is what the heading counts, and it
                     -- was costing a quest name the column it is clipped in.
@@ -1157,13 +1194,22 @@ function ns.newResultsWindow(deps)
                     -- There is no colour for that, so the word is the whole of what the row
                     -- has to say rather than a second telling of it.
                     local scope, color = "completed", nil
-                    if event.accountFirst == true then
+                    if current.accountFirst == true then
                         scope, color = "", ACCOUNT_COLOR
-                    elseif event.characterFirst == true then
+                    elseif current.characterFirst == true then
                         scope, color = "", CHARACTER_COLOR
                     end
-                    line("  " .. (event.name or ("Quest " .. event.id)), scope,
-                        color or REP_COLOR, nil, nil, color)
+                    -- Every quest on this panel has already been handed in, so there is no
+                    -- log entry to open and no map pin to fly to: what a click can still
+                    -- answer is "what was that one", and `deps.openQuest` is the client's own
+                    -- answer to it. Withheld on a build that wired nowhere for it to go and on
+                    -- a quest filed without an id, the same rule the collection rows keep — a
+                    -- row that cannot answer a click must not be mouse-enabled.
+                    local action = deps.openQuest and current.id and function()
+                        deps.openQuest(current.id)
+                    end or nil
+                    line("  " .. (current.name or ("Quest " .. current.id)), scope,
+                        color or REP_COLOR, action, nil, color)
                 end
             end
         end
@@ -1172,7 +1218,16 @@ function ns.newResultsWindow(deps)
             heading("Reputation", "reputation", "+" .. (summary.reputationTotal or 0))
             if expanded.reputation then
                 for _, gain in ipairs(reputation) do
-                    line("  " .. gain.faction, "+" .. group(gain.amount), REP_COLOR)
+                    -- The faction's own row in the character pane, which is where the standing
+                    -- this row reports a change to actually lives: the levels already passed,
+                    -- the rewards waiting, the tracking bar. Only for a faction the client put
+                    -- an id on — a gain parsed out of chat for one it would not name has
+                    -- nothing to open, and must not take the mouse in order to say so.
+                    local factionID = gain.id
+                    local action = deps.openReputation and factionID and function()
+                        deps.openReputation(factionID)
+                    end or nil
+                    line("  " .. gain.faction, "+" .. group(gain.amount), REP_COLOR, action)
                     -- The whole account's standings with this faction, which the "best" line
                     -- below only reports when somebody else is ahead. Silence there means
                     -- "you are in front", and silence is not a thing anybody can read.
@@ -1333,17 +1388,18 @@ function ns.newResultsWindow(deps)
 
         for index = used + 1, #rows do
             -- Taken off screen and taken out of the mouse's way in the same breath. A hidden
-            -- font string cannot be pointed at or clicked, so leaving the handlers on would
-            -- do no harm today — but the pool's invariant is that a row carries only what the
-            -- line it is currently drawing put there, and a row that is only harmless because
-            -- it happens to be hidden is the exception that makes the rule unreadable.
-            for _, region in ipairs({ rows[index].label, rows[index].value }) do
-                region:Hide()
-                takesMouse(region, false)
-                region:SetScript("OnMouseUp", nil)
-                region:SetScript("OnEnter", nil)
-                region:SetScript("OnLeave", nil)
-            end
+            -- frame cannot be pointed at or clicked, so leaving the handlers on would do no
+            -- harm today — but the pool's invariant is that a row carries only what the line
+            -- it is currently drawing put there, and a row that is only harmless because it
+            -- happens to be hidden is the exception that makes the rule unreadable.
+            local row = rows[index]
+            row.label:Hide()
+            row.value:Hide()
+            row.hit:Hide()
+            answersPointer(row.hit, false)
+            row.hit:SetScript("OnClick", nil)
+            row.hit:SetScript("OnEnter", nil)
+            row.hit:SetScript("OnLeave", nil)
         end
 
         for index = usedBars + 1, #bars do
