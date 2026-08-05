@@ -236,6 +236,43 @@ function ns.bestStanding(options)
     return leader
 end
 
+---Whether a gain leaves this character at the front of the account with that faction.
+---
+---What the panel colours a standing bar by, and the whole of what the "best" line under it used
+---to say in words. One question rather than `ns.bestStanding`'s two — that one names who is
+---furthest, which is a thing a tooltip has room for and a bar does not.
+---
+---Deliberately answered without knowing who is playing. `ns.bestStanding` folds the live reading
+---into the roster and needs a character to fold it onto; this is the same comparison made
+---directly against what the store has, so a filed segment read back an hour later — where nobody
+---is at the keyboard and the panel is handed no character at all — is coloured by the same rule
+---as the segment being played.
+---
+---False rather than true wherever the answer is not known: a faction nothing could place, a
+---rollup on a ladder this reading cannot be compared against. Purple is a claim about the whole
+---account, and the honest colour for "we cannot say" is the ordinary one.
+---
+---A tie leads. Two characters level with each other are both at the front, and the stored row
+---the tie is usually against is this very character's own last logout.
+---@param options table `{ gain, rollup }` — the gain the panel is drawing and the store's rollup
+---for that faction.
+---@return boolean
+function ns.leadsStanding(options)
+    options = options or {}
+    local gain = options.gain or {}
+    if gain.rank == nil then
+        return false
+    end
+    local best = options.rollup and options.rollup.best
+    if not best or best.rank == nil then
+        return true
+    end
+    if best.system ~= gain.system then
+        return false
+    end
+    return gain.rank >= best.rank
+end
+
 ---Where every character on the account stands with one faction, as a tooltip.
 ---
 ---The panel's own "best" line names the account's highest standing and who holds it, in one

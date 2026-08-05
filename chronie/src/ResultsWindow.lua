@@ -95,10 +95,18 @@ local HEADER_HEIGHT = 24
 local RULE_HEIGHT = 1
 -- A rule in the body takes a line to itself, breathing on both sides.
 local RULE_LINE = 11
--- A reputation bar sits under the faction it belongs to, indented past its name so the
--- two read as one entry, and takes a whole line of its own so the standing fits on it.
+-- A reputation bar is the row rather than a line under one: the faction's name, how far into
+-- the level it is and what the segment moved it by are all drawn over the track. It is a little
+-- shorter than the line it sits in and centred in it, so a block of factions reads as a stack of
+-- bars with air between them rather than as a solid panel of colour.
 local BAR_HEIGHT = 11
-local BAR_INDENT = 10
+local BAR_TOP = 2
+-- What the middle and right columns of a standing get. The centre holds the longest thing a bar
+-- ever says — "12,500 / 21,000" — and the right holds one segment's gain, which is three or four
+-- figures; everything left over goes to the faction's name, because that is the column a player
+-- running an eye down the block is reading.
+local STANDING_CENTRE_WIDTH = 72
+local STANDING_VALUE_WIDTH = 48
 -- The right-hand column of the picker, which carries when a segment happened. "12 segments"
 -- is the widest thing it ever holds; a row's own is "just now" or "3h ago" or "playing", and
 -- the name beside it is what the eye is actually running down, so the column is cut to what
@@ -134,7 +142,12 @@ local BORDER_COLOR = { 0, 0, 0, 1 }
 local HEADER_COLOR = { 0.11, 0.11, 0.13, 1 }
 local RULE_COLOR = { 1, 0.82, 0, 0.22 }
 local BAR_BACK_COLOR = { 0.14, 0.14, 0.14, 0.9 }
+-- The panel's two colours again, at the weight a filled bar wants rather than the weight a word
+-- does: green where somebody else on the account is further along with this faction, purple
+-- where nobody is. Same rule as everywhere else here — purple is the account's, green is one
+-- character's — and the only place it is said by a shape rather than by a word.
 local BAR_FILL_COLOR = { 0.24, 0.55, 0.29, 0.95 }
+local BAR_BEST_COLOR = { 0.42, 0.28, 0.66, 0.95 }
 local THUMB_COLOR = { 1, 0.82, 0, 0.35 }
 
 local ACCOUNT_HEX = "|cffb373ff"
@@ -819,6 +832,29 @@ function ns.newResultsWindow(deps)
         local usedBars = 0
         local usedRules = 0
 
+        ---Puts the row just claimed under the pointer: the hit area over the whole of it, and
+        ---whatever a click on it does.
+        ---
+        ---Shared by the two shapes of row this panel draws — a label and a value, and a faction
+        ---over a bar of its standing — because what a row is made of and what it answers to are
+        ---two questions. Only the first of them differs.
+        ---@param action fun(button: string)? Called when the row is clicked.
+        ---@return table hit
+        local function takeRow(action)
+            local _, _, hit = rowAt(used)
+            hit:SetPoint("TOPLEFT", PADDING, y)
+            hit:SetWidth(width - PADDING * 2)
+            hit:Show()
+            hit:SetScript("OnClick", action and function(_, button) action(button) end or nil)
+            -- Cleared on every row rather than only where one was set. Rows are pooled, so a
+            -- hit area that covered a faction a moment ago would otherwise still open that
+            -- faction's tooltip now that the same row is drawing a mount.
+            hit:SetScript("OnEnter", nil)
+            hit:SetScript("OnLeave", nil)
+            answersPointer(hit, action ~= nil)
+            return hit
+        end
+
         ---@param text string
         ---@param valueText string
         ---@param color number[]
@@ -827,7 +863,7 @@ function ns.newResultsWindow(deps)
         ---@param labelColor number[]? Brighter for a category heading than for what is under it.
         local function line(text, valueText, color, action, requestedValueWidth, labelColor)
             used = used + 1
-            local label, value, hit = rowAt(used)
+            local label, value = rowAt(used)
             local valueWidth = valueText ~= "" and (requestedValueWidth or VALUE_WIDTH) or 0
             local gap = valueWidth > 0 and COLUMN_GAP or 0
             label:SetWidth(width - PADDING * 2 - valueWidth - gap)
@@ -841,16 +877,7 @@ function ns.newResultsWindow(deps)
             value:SetText(valueText)
             value:SetTextColor(color[1], color[2], color[3])
             value:Show()
-            hit:SetPoint("TOPLEFT", PADDING, y)
-            hit:SetWidth(width - PADDING * 2)
-            hit:Show()
-            hit:SetScript("OnClick", action and function(_, button) action(button) end or nil)
-            -- Cleared on every line rather than only where one was set. Rows are pooled, so a
-            -- hit area that covered a faction a moment ago would otherwise still open that
-            -- faction's tooltip now that the same row is drawing a mount.
-            hit:SetScript("OnEnter", nil)
-            hit:SetScript("OnLeave", nil)
-            answersPointer(hit, action ~= nil)
+            takeRow(action)
             y = y - LINE
         end
 
@@ -876,21 +903,50 @@ function ns.newResultsWindow(deps)
             hit:SetScript("OnLeave", hideTooltip)
         end
 
-        ---A progress bar occupying a line of its own, under the row it belongs to.
-        ---@param current integer How far into the level the character is.
-        ---@param max integer How long the level is; zero draws an empty track.
-        ---@param caption string Drawn over the bar.
-        local function bar(current, max, caption)
+        ---One faction, drawn as the bar itself: the name on the left, how far into the level
+        ---the character is centred over it, and what this segment moved it by on the right.
+        ---
+        ---A standing used to take three lines — a name, a bar under it, and a line naming
+        ---whoever on the account was furthest along. All three were saying one thing, and the
+        ---bar was the only one of them saying it in a shape the eye reads without stopping. So
+        ---the row *is* the bar: everything the other two lines carried is on it, in the tooltip
+        ---over it, or in what colour it is filled.
+        ---
+        ---**The colour is the crown.** Purple where nobody on the account is known to be further
+        ---along, green where somebody is — the panel's own two colours, in the order it uses
+        ---them everywhere else. That is the whole of what the "best" line said, said without a
+        ---line of its own and without the silence problem the line was written to avoid: a bar
+        ---is always one colour or the other, so there is never an absence to read.
+        ---
+        ---The level's own name — "Renown 8", "Honored" — is not on the row. Three columns is
+        ---what fits across a HUD this narrow, and of the four things a standing knows, the name
+        ---of the level is the one the bar itself half draws. It is the first line of the
+        ---tooltip.
+        ---@param gain ReputationGain
+        ---@param leads boolean Whether this is the furthest along the account is known to be.
+        ---@param action fun(button: string)? Called when the row is clicked.
+        local function standing(gain, leads, action)
+            used = used + 1
             usedBars = usedBars + 1
-            local back, fill, text = barAt(usedBars)
-            local track = width - PADDING * 2 - BAR_INDENT
+            local label, value = rowAt(used)
+            local back, fill, centre = barAt(usedBars)
+
+            local track = width - PADDING * 2
+            -- Centred in the row rather than in what the name leaves, so the numbers down a
+            -- block of factions line up under each other whatever they are called.
+            local centreWidth = math.min(STANDING_CENTRE_WIDTH, track)
+            local labelWidth = math.max((track - centreWidth) / 2 - COLUMN_GAP, 1)
+            local current, max = gain.current or 0, gain.max or 0
             local fraction = max > 0 and math.min(current / max, 1) or 0
-            back:SetPoint("TOPLEFT", PADDING + BAR_INDENT, y)
+
+            back:SetPoint("TOPLEFT", PADDING, y - BAR_TOP)
             back:SetWidth(track)
             back:SetHeight(BAR_HEIGHT)
             back:Show()
-            fill:SetPoint("TOPLEFT", PADDING + BAR_INDENT, y)
+            fill:SetPoint("TOPLEFT", PADDING, y - BAR_TOP)
             fill:SetHeight(BAR_HEIGHT)
+            local filled = leads and BAR_BEST_COLOR or BAR_FILL_COLOR
+            fill:SetColorTexture(filled[1], filled[2], filled[3], filled[4])
             if fraction > 0 then
                 -- Kept off zero once any progress exists at all: a sliver still reads as
                 -- "started", where a bar of no width reads as an untouched level.
@@ -899,10 +955,40 @@ function ns.newResultsWindow(deps)
             else
                 fill:Hide()
             end
-            text:SetPoint("TOPLEFT", PADDING + BAR_INDENT, y - 1)
-            text:SetWidth(track)
-            text:SetText(caption)
-            text:Show()
+
+            label:SetPoint("TOPLEFT", PADDING, y)
+            label:SetWidth(labelWidth)
+            label:SetText(gain.faction)
+            label:SetTextColor(HEADING_COLOR[1], HEADING_COLOR[2], HEADING_COLOR[3])
+            label:Show()
+
+            -- The numbers where the client gave them, the level's name where it gave only that,
+            -- and nothing at all where it would not place the faction — which is a bar with an
+            -- empty track, and reads as the honest "we know you gained, and no more".
+            local progress = ""
+            if max > 0 then
+                progress = group(current) .. " / " .. group(max)
+            elseif gain.standing then
+                progress = gain.standing
+            end
+            centre:SetPoint("TOPLEFT", PADDING + (track - centreWidth) / 2, y)
+            centre:SetWidth(centreWidth)
+            centre:SetText(progress)
+            centre:Show()
+
+            value:SetPoint("TOPRIGHT", -PADDING, y)
+            value:SetWidth(STANDING_VALUE_WIDTH)
+            -- Signed the way the currency rows are signed rather than with a "+" written in
+            -- front of whatever arrived: reputation can be lost, and `group` puts the minus on
+            -- itself, so the old spelling would have read "+-250" the first time it was.
+            value:SetText((gain.amount >= 0 and "+" or "") .. group(gain.amount))
+            -- Left the panel's ordinary value colour on purpose. The bar under it is already
+            -- green or purple, and a number coloured by a different rule beside a bar coloured
+            -- by this one would be two colours disagreeing about the same faction.
+            value:SetTextColor(VALUE_COLOR[1], VALUE_COLOR[2], VALUE_COLOR[3])
+            value:Show()
+
+            takeRow(action)
             y = y - LINE
         end
 
@@ -933,55 +1019,6 @@ function ns.newResultsWindow(deps)
                     expanded[key] = not expanded[key]
                     render(latest)
                 end, requestedValueWidth, HEADING_COLOR)
-        end
-
-        ---How stale an account-wide figure is, as it reads on the end of a line. Empty for
-        ---anything read in the last minute, which is the ordinary case for the character
-        ---being played and not worth the width.
-        ---@param at integer? When it was read.
-        ---@return string
-        local function staleness(at)
-            local clock = deps.now
-            if not clock or not at or at <= 0 then
-                return ""
-            end
-            local age = ns.formatAge(clock() - at)
-            return age == "now" and "" or (", " .. age)
-        end
-
-        ---The highest standing with a faction this segment gained that anybody on the account
-        ---is known to hold, and who is holding it.
-        ---
-        ---Always drawn, the character being played included. It used to appear only when
-        ---somebody else was further along, which left an absent line carrying the meaning "you
-        ---are the furthest" — on screen that is indistinguishable from the panel knowing
-        ---nothing about the faction at all, and a player cannot read the difference. Naming the
-        ---holder outright costs one line and answers the question whichever way it falls.
-        ---
-        ---The crown is `ns.bestStanding`'s, which is the one the tooltip over this same row
-        ---draws: it counts what has been earned this session rather than only what the store
-        ---filed, so a character that overtook the account's best an hour ago is told so.
-        ---@param gain ReputationGain
-        local function accountStandingLine(gain)
-            if not gain.faction then
-                return
-            end
-            local best = ns.bestStanding({
-                faction = gain.faction,
-                gain = gain,
-                rollup = deps.accountStanding and deps.accountStanding(gain.id),
-                character = deps.character and deps.character(),
-                now = deps.now and deps.now(),
-            })
-            if not best then
-                return
-            end
-            -- "you" carries no staleness in the ordinary case, because the reading folded in
-            -- for the character being played is the client's own and a moment old. It still
-            -- gets one where the standing came off this character's stored row instead — a
-            -- faction the client would not place this time, read at some earlier logout.
-            local who = (best.you and "you" or best.name) .. staleness(best.at)
-            line("    best " .. (best.standing or "standing"), who, ACCOUNT_COLOR, nil, SUMMARY_VALUE_WIDTH)
         end
 
         -- Only what this hour of play produced. The balances it landed on — the wallet, what
@@ -1227,30 +1264,21 @@ function ns.newResultsWindow(deps)
                     local action = deps.openReputation and factionID and function()
                         deps.openReputation(factionID)
                     end or nil
-                    line("  " .. gain.faction, "+" .. group(gain.amount), REP_COLOR, action)
-                    -- The whole account's standings with this faction, which the "best" line
-                    -- below only reports when somebody else is ahead. Silence there means
-                    -- "you are in front", and silence is not a thing anybody can read.
+                    -- Asked once and spent twice: the same rollup says who else on the account
+                    -- has met this faction, which is the tooltip, and whether any of them is
+                    -- further along, which is what colour the bar is filled.
+                    local rollup = deps.accountStanding and deps.accountStanding(gain.id)
+                    standing(gain, ns.leadsStanding({ gain = gain, rollup = rollup }), action)
+                    -- Every character the account has been seen with this faction as. The bar
+                    -- says whether anybody is ahead; this is the only place that says who, and
+                    -- by how far, and how long ago they were last looked at.
                     hover(ns.standingTooltip({
                         faction = gain.faction,
                         gain = gain,
-                        rollup = deps.accountStanding and deps.accountStanding(gain.id),
+                        rollup = rollup,
                         character = deps.character and deps.character(),
                         now = deps.now and deps.now(),
                     }))
-                    -- Only factions the client could place get a bar. A gain parsed out of
-                    -- chat for a faction the client will not name — an account-wide line
-                    -- read on a character that has never met them — has nowhere to sit.
-                    if gain.standing or (gain.max or 0) > 0 then
-                        local current, max = gain.current or 0, gain.max or 0
-                        local caption = gain.standing or ""
-                        if max > 0 then
-                            caption = (caption ~= "" and caption .. "  " or "")
-                                .. group(current) .. " / " .. group(max)
-                        end
-                        bar(current, max, caption)
-                    end
-                    accountStandingLine(gain)
                 end
             end
         end
