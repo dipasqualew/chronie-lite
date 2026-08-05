@@ -2418,9 +2418,12 @@ describe("addon integration", function()
         local function panelLootValue(recorded)
             for _, frame in ipairs(recorded.frames) do
                 if frame.frameName == "ChronieResultsWindow" then
-                    for index, fontString in ipairs(frame.fontStrings) do
+                    -- The rows are drawn inside the viewport that scrolls them rather than on
+                    -- the panel itself, so this is a walk rather than one list.
+                    local fontStrings = fake.regionsOf(frame)
+                    for index, fontString in ipairs(fontStrings) do
                         if fontString.text == "Loot value" then
-                            local value = frame.fontStrings[index + 1]
+                            local value = fontStrings[index + 1]
                             return value and value.text
                         end
                     end
@@ -3012,7 +3015,7 @@ describe("addon integration", function()
         ---@param frame table
         ---@return table?
         local function headerOf(frame)
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.template ~= "GameFontHighlightSmall" then
                     return fontString
                 end
@@ -3052,7 +3055,7 @@ describe("addon integration", function()
         ---@return table[] `{ { label = string, detail = string }, ... }`
         local function pickerRows(frame)
             local labels, details = {}, {}
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and fontString.justify == "LEFT" then
                     labels[#labels + 1] = fontString.text
                 elseif fontString.shown and fontString.justify == "RIGHT" then
@@ -3070,7 +3073,7 @@ describe("addon integration", function()
         ---@param frame table the picker's frame
         ---@param label string
         local function pickRow(frame, label)
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and fontString.justify == "LEFT" and fontString.text == label then
                     fontString:run("OnMouseUp", "LeftButton")
                     return
@@ -3095,9 +3098,10 @@ describe("addon integration", function()
         ---@param label string
         ---@return string?
         local function panelValueFor(frame, label)
-            for index, fontString in ipairs(frame.fontStrings) do
+            local fontStrings = fake.regionsOf(frame)
+            for index, fontString in ipairs(fontStrings) do
                 if fontString.text == label then
-                    local value = frame.fontStrings[index + 1]
+                    local value = fontStrings[index + 1]
                     return value and value.text
                 end
             end
@@ -3292,13 +3296,13 @@ describe("addon integration", function()
             )
 
             local frame = panelFrame(recorded)
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and (fontString.text or ""):find("Reputation", 1, true) then
                     fontString:run("OnMouseUp", "LeftButton")
                     break
                 end
             end
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and fontString.justify == "LEFT"
                     and (fontString.text or ""):find("Argent Dawn", 1, true) then
                     fontString:run("OnEnter")
@@ -3340,13 +3344,13 @@ describe("addon integration", function()
             local frame = panelFrame(recorded)
             -- The heading first, because the item's own row is not drawn until the block it
             -- sits in has been opened, and then the row the appearance was filed under.
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and (fontString.text or ""):find("Transmog", 1, true) then
                     fontString:run("OnMouseUp", "LeftButton")
                     break
                 end
             end
-            for _, fontString in ipairs(frame.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(frame))) do
                 if fontString.shown and (fontString.text or ""):find("Item 19019", 1, true) then
                     fontString:run("OnMouseUp", "LeftButton")
                     break
@@ -4886,7 +4890,7 @@ describe("addon integration", function()
             end
             assert.is_table(panel)
 
-            for _, fontString in ipairs(panel.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(panel))) do
                 if fontString.shown and (fontString.text or ""):find("Reputation", 1, true) then
                     fontString:run("OnMouseUp", "LeftButton")
                     break
@@ -4896,7 +4900,7 @@ describe("addon integration", function()
             -- Labels and values are told apart by justification and paired in drawn order,
             -- which is how every other reading of this panel reconstructs a line.
             local labels, values = {}, {}
-            for _, fontString in ipairs(panel.fontStrings) do
+            for _, fontString in ipairs((fake.regionsOf(panel))) do
                 local row = fontString.shown and fontString.template == "GameFontHighlightSmall"
                 if row and fontString.justify == "LEFT" then
                     labels[#labels + 1] = fontString.text
